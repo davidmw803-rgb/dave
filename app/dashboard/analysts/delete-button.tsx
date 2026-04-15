@@ -1,31 +1,40 @@
 'use client';
 
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
-import { createClient } from '@/lib/supabase/client';
+import { useTransition } from 'react';
+import { deactivateAnalyst, reactivateAnalyst } from './actions';
 
-export function DeleteButton({ id }: { id: string }) {
-  const router = useRouter();
-  const supabase = createClient();
-  const [pending, setPending] = useState(false);
+export function DeleteButton({ id, active }: { id: string; active: boolean }) {
+  const [pending, startTransition] = useTransition();
 
-  async function handleDelete() {
-    if (!confirm('Remove this analyst? Their historical events will be preserved.'))
-      return;
-    setPending(true);
-    // Soft delete: set active=false rather than hard delete
-    await supabase.from('trusted_analysts').update({ active: false }).eq('id', id);
-    setPending(false);
-    router.refresh();
+  function handleClick() {
+    if (active) {
+      if (
+        !confirm(
+          'Deactivate this analyst? Their historical events will be preserved.'
+        )
+      )
+        return;
+      startTransition(async () => {
+        await deactivateAnalyst(id);
+      });
+    } else {
+      startTransition(async () => {
+        await reactivateAnalyst(id);
+      });
+    }
   }
 
   return (
     <button
-      onClick={handleDelete}
+      onClick={handleClick}
       disabled={pending}
-      className="text-xs text-neutral-500 hover:text-red-400 disabled:opacity-50"
+      className={
+        active
+          ? 'text-xs text-neutral-500 hover:text-red-400 disabled:opacity-50'
+          : 'text-xs text-neutral-500 hover:text-emerald-400 disabled:opacity-50'
+      }
     >
-      {pending ? '...' : 'Deactivate'}
+      {pending ? '...' : active ? 'Deactivate' : 'Reactivate'}
     </button>
   );
 }

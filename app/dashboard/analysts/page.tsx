@@ -1,11 +1,11 @@
-import { createClient } from '@/lib/supabase/server';
+import { createAdminClient } from '@/lib/supabase/admin';
 import { AnalystForm } from './analyst-form';
 import { DeleteButton } from './delete-button';
 
 export const dynamic = 'force-dynamic';
 
 export default async function AnalystsPage() {
-  const supabase = createClient();
+  const supabase = createAdminClient();
   const { data: analysts, error } = await supabase
     .from('trusted_analysts')
     .select('*')
@@ -94,7 +94,7 @@ export default async function AnalystsPage() {
                     )}
                   </td>
                   <td className="px-4 py-3 text-right">
-                    <DeleteButton id={a.id} />
+                    <DeleteButton id={a.id} active={a.active} />
                   </td>
                 </tr>
               ))}
