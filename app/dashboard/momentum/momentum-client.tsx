@@ -3,13 +3,13 @@
 import { useState } from 'react';
 import { analyze, parseOhlcCsv, type Candle, type MomentumReport } from '@/lib/momentum/analyze';
 
-type Source = 'coinbase' | 'csv';
+type Source = 'live' | 'csv';
 
-const INTERVALS = ['1d', '6h', '1h', '15m', '5m', '1m'] as const;
+const INTERVALS = ['1d', '1h', '30m', '15m', '5m', '1m'] as const;
 type Interval = (typeof INTERVALS)[number];
 
 export function MomentumClient() {
-  const [source, setSource] = useState<Source>('coinbase');
+  const [source, setSource] = useState<Source>('live');
   const [symbol, setSymbol] = useState('BTC-USD');
   const [interval, setInterval] = useState<Interval>('1d');
   const [limit, setLimit] = useState(365);
@@ -19,26 +19,33 @@ export function MomentumClient() {
   const [report, setReport] = useState<MomentumReport | null>(null);
   const [label, setLabel] = useState<string>('');
 
-  async function runCoinbase() {
+  async function runLive() {
     setLoading(true);
     setError(null);
     setReport(null);
     try {
-      const bars = Math.min(Math.max(limit, 2), 2000);
+      const bars = Math.min(Math.max(limit, 2), 5000);
       const url = `/api/momentum/klines?symbol=${encodeURIComponent(
         symbol.toUpperCase()
       )}&interval=${interval}&bars=${bars}`;
       const res = await fetch(url);
       const body = (await res.json()) as
-        | { error: string }
-        | { candles: Candle[]; count: number };
+        | { error: string; attempts?: { provider: string; error: string }[] }
+        | { candles: Candle[]; count: number; provider: string };
       if (!res.ok || 'error' in body) {
-        throw new Error('error' in body ? body.error : `Request failed: ${res.status}`);
+        const msg = 'error' in body ? body.error : `Request failed: ${res.status}`;
+        const details =
+          'attempts' in body && body.attempts
+            ? ' — ' + body.attempts.map((a) => `${a.provider}: ${a.error}`).join('; ')
+            : '';
+        throw new Error(msg + details);
       }
       if (body.candles.length === 0) throw new Error('No candles returned.');
       const r = analyze(body.candles, !keepDojis);
       setReport(r);
-      setLabel(`${symbol.toUpperCase()} (${interval}, ${body.candles.length} bars)`);
+      setLabel(
+        `${symbol.toUpperCase()} (${interval}, ${body.candles.length} bars · ${body.provider})`
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -68,12 +75,12 @@ export function MomentumClient() {
       <section className="rounded-lg border border-neutral-800 bg-neutral-900 p-6">
         <div className="mb-4 flex items-center gap-2 text-xs uppercase tracking-wide text-neutral-400">
           <button
-            onClick={() => setSource('coinbase')}
+            onClick={() => setSource('live')}
             className={`rounded px-2 py-1 ${
-              source === 'coinbase' ? 'bg-neutral-800 text-white' : 'text-neutral-500'
+              source === 'live' ? 'bg-neutral-800 text-white' : 'text-neutral-500'
             }`}
           >
-            Coinbase
+            Live (Yahoo / Coinbase)
           </button>
           <button
             onClick={() => setSource('csv')}
@@ -85,13 +92,13 @@ export function MomentumClient() {
           </button>
         </div>
 
-        {source === 'coinbase' ? (
+        {source === 'live' ? (
           <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
             <LabeledInput
               label="Symbol"
               value={symbol}
               onChange={(v) => setSymbol(v)}
-              placeholder="BTC-USD"
+              placeholder="BTC-USD, SPY, AAPL"
             />
             <LabeledSelect
               label="Interval"
@@ -108,7 +115,7 @@ export function MomentumClient() {
             />
             <div className="flex items-end">
               <button
-                onClick={runCoinbase}
+                onClick={runLive}
                 disabled={loading}
                 className="w-full rounded bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-50"
               >
