@@ -21,6 +21,8 @@ export function PriceChart({ candles, label }: Props) {
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null);
+  const firstTimeRef = useRef<number | null>(null);
+  const lastTimeRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -82,7 +84,7 @@ export function PriceChart({ candles, label }: Props) {
     const candleSeries = candleSeriesRef.current;
     const volumeSeries = volumeSeriesRef.current;
     const chart = chartRef.current;
-    if (!candleSeries || !volumeSeries || !chart) return;
+    if (!candleSeries || !volumeSeries || !chart || candles.length === 0) return;
 
     const sorted = [...candles].sort((a, b) => a.time - b.time);
     const candleData = sorted.map((c) => ({
@@ -100,9 +102,34 @@ export function PriceChart({ candles, label }: Props) {
         color: c.close >= c.open ? 'rgba(16,185,129,0.4)' : 'rgba(239,68,68,0.4)',
       }));
 
-    candleSeries.setData(candleData);
-    volumeSeries.setData(volumeData);
-    chart.timeScale().fitContent();
+    const prevFirstTime = firstTimeRef.current;
+    const prevLastTime = lastTimeRef.current;
+    const newFirstTime = candleData[0].time as number;
+    const newLastTime = candleData[candleData.length - 1].time as number;
+    const isFreshDataset = prevFirstTime === null || newFirstTime !== prevFirstTime;
+
+    if (isFreshDataset) {
+      // New symbol/interval — reseed everything and fit the view.
+      candleSeries.setData(candleData);
+      volumeSeries.setData(volumeData);
+      chart.timeScale().fitContent();
+    } else if (newLastTime === prevLastTime) {
+      // Same last bar — update it in place, preserving user pan/zoom.
+      candleSeries.update(candleData[candleData.length - 1]);
+      const lastVol = volumeData[volumeData.length - 1];
+      if (lastVol && (lastVol.time as number) === newLastTime) {
+        volumeSeries.update(lastVol);
+      }
+    } else {
+      // One or more new bars — append everything after the previous last bar.
+      const newCandles = candleData.filter((c) => (c.time as number) > (prevLastTime ?? -Infinity));
+      const newVolumes = volumeData.filter((v) => (v.time as number) > (prevLastTime ?? -Infinity));
+      newCandles.forEach((c) => candleSeries.update(c));
+      newVolumes.forEach((v) => volumeSeries.update(v));
+    }
+
+    firstTimeRef.current = newFirstTime;
+    lastTimeRef.current = newLastTime;
   }, [candles]);
 
   return (

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   analyze,
   parseOhlcCsv,
@@ -16,6 +16,16 @@ type Source = 'live' | 'csv';
 const INTERVALS = ['1d', '1h', '30m', '15m', '5m', '1m'] as const;
 type Interval = (typeof INTERVALS)[number];
 
+// Poll cadence per timeframe (ms). Anything finer than 5s is wasted against Yahoo.
+const REFRESH_MS: Record<Interval, number> = {
+  '1m': 10_000,
+  '5m': 20_000,
+  '15m': 30_000,
+  '30m': 60_000,
+  '1h': 60_000,
+  '1d': 120_000,
+};
+
 export function MomentumClient() {
   const [source, setSource] = useState<Source>('live');
   const [symbol, setSymbol] = useState('BTC-USD');
@@ -28,19 +38,41 @@ export function MomentumClient() {
   const [ohlc, setOhlc] = useState<OhlcCandle[]>([]);
   const [hasChartData, setHasChartData] = useState(false);
   const [label, setLabel] = useState<string>('');
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [lastUpdated, setLastUpdated] = useState<number | null>(null);
+  const [nowTick, setNowTick] = useState(Date.now());
 
-  async function runLive() {
-    setLoading(true);
-    setError(null);
-    setReport(null);
-    setOhlc([]);
-    setHasChartData(false);
+  // Hold latest input values in refs so the polling effect can read them
+  // without needing to restart whenever they change.
+  const paramsRef = useRef({ symbol, interval, limit, keepDojis });
+  useEffect(() => {
+    paramsRef.current = { symbol, interval, limit, keepDojis };
+  }, [symbol, interval, limit, keepDojis]);
+
+  // Re-analyze existing bars whenever the doji toggle changes
+  useEffect(() => {
+    if (ohlc.length > 1) {
+      try {
+        setReport(analyze(ohlc, !keepDojis));
+      } catch {
+        // ignore — not enough data
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [keepDojis]);
+
+  const fetchLive = useCallback(async (silent: boolean): Promise<boolean> => {
+    const { symbol: s, interval: i, limit: l, keepDojis: kd } = paramsRef.current;
+    if (!silent) {
+      setLoading(true);
+      setError(null);
+    }
     try {
-      const bars = Math.min(Math.max(limit, 2), 5000);
+      const bars = Math.min(Math.max(l, 2), 5000);
       const url = `/api/momentum/klines?symbol=${encodeURIComponent(
-        symbol.toUpperCase()
-      )}&interval=${interval}&bars=${bars}`;
-      const res = await fetch(url);
+        s.toUpperCase()
+      )}&interval=${i}&bars=${bars}`;
+      const res = await fetch(url, { cache: 'no-store' });
       const body = (await res.json()) as
         | { error: string; attempts?: { provider: string; error: string }[] }
         | { candles: OhlcCandle[]; count: number; provider: string };
@@ -53,19 +85,45 @@ export function MomentumClient() {
         throw new Error(msg + details);
       }
       if (body.candles.length === 0) throw new Error('No candles returned.');
-      const r = analyze(body.candles, !keepDojis);
-      setReport(r);
+      setReport(analyze(body.candles, !kd));
       setOhlc(body.candles);
       setHasChartData(true);
       setLabel(
-        `${symbol.toUpperCase()} (${interval}, ${body.candles.length} bars · ${body.provider})`
+        `${s.toUpperCase()} (${i}, ${body.candles.length} bars · ${body.provider})`
       );
+      setLastUpdated(Date.now());
+      if (silent) setError(null);
+      return true;
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      // For silent background refreshes, surface the error but keep old data visible.
+      setError(msg);
+      return false;
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
+  }, []);
+
+  async function runLive() {
+    await fetchLive(false);
   }
+
+  // Auto-refresh polling loop
+  useEffect(() => {
+    if (!hasChartData || !autoRefresh || source !== 'live') return;
+    const delay = REFRESH_MS[interval] ?? 30_000;
+    const id = window.setInterval(() => {
+      fetchLive(true);
+    }, delay);
+    return () => window.clearInterval(id);
+  }, [hasChartData, autoRefresh, source, interval, fetchLive]);
+
+  // Clock tick so the "updated Ns ago" label stays current without re-renders
+  useEffect(() => {
+    if (!hasChartData) return;
+    const id = window.setInterval(() => setNowTick(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [hasChartData]);
 
   async function handleCsv(file: File) {
     setLoading(true);
@@ -73,6 +131,7 @@ export function MomentumClient() {
     setReport(null);
     setOhlc([]);
     setHasChartData(false);
+    setLastUpdated(null);
     try {
       const text = await file.text();
       const candles = parseOhlcCsv(text);
@@ -138,13 +197,34 @@ export function MomentumClient() {
                 {loading ? 'Running...' : 'Fetch & analyze'}
               </button>
             </div>
-            <label className="col-span-full flex items-center gap-2 text-sm text-neutral-400">
-              <input
-                type="checkbox"
-                checked={keepDojis}
-                onChange={(e) => setKeepDojis(e.target.checked)}
-              />
-              Keep doji candles (zero body)
+            <label className="col-span-full flex flex-wrap items-center gap-x-6 gap-y-2 text-sm text-neutral-400">
+              <span className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={keepDojis}
+                  onChange={(e) => setKeepDojis(e.target.checked)}
+                />
+                Keep doji candles (zero body)
+              </span>
+              <span className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={autoRefresh}
+                  onChange={(e) => setAutoRefresh(e.target.checked)}
+                />
+                Auto-refresh ({Math.round((REFRESH_MS[interval] ?? 30000) / 1000)}s)
+              </span>
+              {hasChartData && lastUpdated !== null && (
+                <span className="flex items-center gap-2 text-xs">
+                  <span
+                    className={`inline-block h-2 w-2 rounded-full ${
+                      autoRefresh ? 'animate-pulse bg-emerald-500' : 'bg-neutral-500'
+                    }`}
+                  />
+                  {autoRefresh ? 'Live' : 'Paused'} · updated{' '}
+                  {secondsAgo(lastUpdated, nowTick)} ago
+                </span>
+              )}
             </label>
           </div>
         ) : (
@@ -396,4 +476,11 @@ function formatNum(x: number): string {
   if (!Number.isFinite(x)) return '—';
   const sign = x > 0 ? '+' : '';
   return `${sign}${x.toFixed(4)}`;
+}
+
+function secondsAgo(then: number, now: number): string {
+  const s = Math.max(0, Math.floor((now - then) / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  return `${m}m ${s % 60}s`;
 }
