@@ -9,6 +9,7 @@ import {
   type OhlcCandle,
 } from '@/lib/momentum/analyze';
 import { PriceChart } from './price-chart';
+import { PolymarketEmbed } from './polymarket-embed';
 
 type Source = 'live' | 'csv';
 
@@ -179,6 +180,30 @@ export function MomentumClient() {
       </section>
 
       {hasChartData && ohlc.length > 0 && <PriceChart candles={ohlc} label={label} />}
+
+      <section className="rounded-lg border border-neutral-800 bg-neutral-900 p-5">
+        <h4 className="mb-3 text-sm font-semibold uppercase tracking-wide text-neutral-400">
+          Live Polymarket markets
+        </h4>
+        <div className="flex flex-wrap gap-4">
+          <PolymarketEmbed
+            marketSlug="btc-updown-5m-1776405900"
+            title="Bitcoin Up or Down - April 17, 2:05AM-2:10AM ET"
+            url="https://polymarket.com/event/btc-updown-5m-1776405900"
+            summary="Prediction market: Up 51% · Down 50% on Polymarket."
+            creator="0xabe5BDFe70818FFE8C7E7fe5bb39cC868794AC8e-1776383091528"
+          />
+          <PolymarketEmbed
+            marketSlug="btc-updown-5m-1776405900"
+            title="Bitcoin Up or Down - April 17, 2:05AM-2:10AM ET"
+            url="https://polymarket.com/event/btc-updown-5m-1776405900"
+            summary="Prediction market: Up 51% · Down 50% on Polymarket."
+            border
+            creator="0xabe5BDFe70818FFE8C7E7fe5bb39cC868794AC8e-1776383091528"
+          />
+        </div>
+      </section>
+
       {report && <Report report={report} label={label} />}
     </div>
   );
