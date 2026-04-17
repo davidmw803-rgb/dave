@@ -1,7 +1,14 @@
 'use client';
 
 import { useState } from 'react';
-import { analyze, parseOhlcCsv, type Candle, type MomentumReport } from '@/lib/momentum/analyze';
+import {
+  analyze,
+  parseOhlcCsv,
+  type Candle,
+  type MomentumReport,
+  type OhlcCandle,
+} from '@/lib/momentum/analyze';
+import { PriceChart } from './price-chart';
 
 type Source = 'live' | 'csv';
 
@@ -17,12 +24,16 @@ export function MomentumClient() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [report, setReport] = useState<MomentumReport | null>(null);
+  const [ohlc, setOhlc] = useState<OhlcCandle[]>([]);
+  const [hasChartData, setHasChartData] = useState(false);
   const [label, setLabel] = useState<string>('');
 
   async function runLive() {
     setLoading(true);
     setError(null);
     setReport(null);
+    setOhlc([]);
+    setHasChartData(false);
     try {
       const bars = Math.min(Math.max(limit, 2), 5000);
       const url = `/api/momentum/klines?symbol=${encodeURIComponent(
@@ -31,7 +42,7 @@ export function MomentumClient() {
       const res = await fetch(url);
       const body = (await res.json()) as
         | { error: string; attempts?: { provider: string; error: string }[] }
-        | { candles: Candle[]; count: number; provider: string };
+        | { candles: OhlcCandle[]; count: number; provider: string };
       if (!res.ok || 'error' in body) {
         const msg = 'error' in body ? body.error : `Request failed: ${res.status}`;
         const details =
@@ -43,6 +54,8 @@ export function MomentumClient() {
       if (body.candles.length === 0) throw new Error('No candles returned.');
       const r = analyze(body.candles, !keepDojis);
       setReport(r);
+      setOhlc(body.candles);
+      setHasChartData(true);
       setLabel(
         `${symbol.toUpperCase()} (${interval}, ${body.candles.length} bars · ${body.provider})`
       );
@@ -57,6 +70,8 @@ export function MomentumClient() {
     setLoading(true);
     setError(null);
     setReport(null);
+    setOhlc([]);
+    setHasChartData(false);
     try {
       const text = await file.text();
       const candles = parseOhlcCsv(text);
@@ -163,6 +178,7 @@ export function MomentumClient() {
         )}
       </section>
 
+      {hasChartData && ohlc.length > 0 && <PriceChart candles={ohlc} label={label} />}
       {report && <Report report={report} label={label} />}
     </div>
   );
