@@ -1,5 +1,14 @@
 export type Candle = { open: number; close: number };
 
+export type OhlcCandle = {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume?: number;
+};
+
 export type MomentumReport = {
   nCandles: number;
   nTransitions: number;

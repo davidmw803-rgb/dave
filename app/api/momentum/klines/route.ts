@@ -6,7 +6,14 @@ export const dynamic = 'force-dynamic';
 const UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15';
 
-type Candle = { time: number; open: number; close: number };
+type Candle = {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume?: number;
+};
 
 // ---------------------------------------------------------------------------
 // Yahoo Finance chart endpoint (works for stocks, ETFs, and crypto like BTC-USD)
@@ -44,7 +51,15 @@ async function fetchYahoo(symbol: string, interval: string, bars: number): Promi
     chart?: {
       result?: Array<{
         timestamp?: number[];
-        indicators?: { quote?: Array<{ open?: (number | null)[]; close?: (number | null)[] }> };
+        indicators?: {
+          quote?: Array<{
+            open?: (number | null)[];
+            high?: (number | null)[];
+            low?: (number | null)[];
+            close?: (number | null)[];
+            volume?: (number | null)[];
+          }>;
+        };
       }>;
       error?: { description?: string };
     };
@@ -54,13 +69,34 @@ async function fetchYahoo(symbol: string, interval: string, bars: number): Promi
   const result = json.chart?.result?.[0];
   const ts = result?.timestamp;
   const q = result?.indicators?.quote?.[0];
-  if (!ts || !q || !q.open || !q.close) throw new Error('Yahoo: empty response');
+  if (!ts || !q || !q.open || !q.close || !q.high || !q.low) {
+    throw new Error('Yahoo: empty response');
+  }
   const out: Candle[] = [];
   for (let i = 0; i < ts.length; i++) {
     const o = q.open[i];
+    const h = q.high[i];
+    const l = q.low[i];
     const c = q.close[i];
-    if (typeof o === 'number' && typeof c === 'number' && Number.isFinite(o) && Number.isFinite(c)) {
-      out.push({ time: ts[i], open: o, close: c });
+    const v = q.volume?.[i];
+    if (
+      typeof o === 'number' &&
+      typeof h === 'number' &&
+      typeof l === 'number' &&
+      typeof c === 'number' &&
+      Number.isFinite(o) &&
+      Number.isFinite(h) &&
+      Number.isFinite(l) &&
+      Number.isFinite(c)
+    ) {
+      out.push({
+        time: ts[i],
+        open: o,
+        high: h,
+        low: l,
+        close: c,
+        volume: typeof v === 'number' && Number.isFinite(v) ? v : undefined,
+      });
     }
   }
   return out.slice(-bars);
@@ -113,7 +149,14 @@ async function fetchCoinbase(symbol: string, interval: string, bars: number): Pr
   const seen = new Set<number>();
   const uniq = rows.filter((r) => (seen.has(r[0]) ? false : (seen.add(r[0]), true)));
   uniq.sort((a, b) => a[0] - b[0]);
-  return uniq.slice(-bars).map((r) => ({ time: r[0], open: r[3], close: r[4] }));
+  return uniq.slice(-bars).map((r) => ({
+    time: r[0],
+    low: r[1],
+    high: r[2],
+    open: r[3],
+    close: r[4],
+    volume: r[5],
+  }));
 }
 
 // ---------------------------------------------------------------------------
