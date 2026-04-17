@@ -106,12 +106,34 @@ Expectancy verdict:      POSITIVE
 - **Dojis.** Zero-body candles are dropped by default (they have no direction).
   Pass `--keep-dojis` to include them.
 
+## Dashboard (Streamlit UI)
+
+Same `analyze()` function, browser UI:
+
+```bash
+streamlit run dashboard.py
+```
+
+Three tabs:
+
+- **Run Analysis** — pick yfinance / CSV / Supabase, set params, hit go. Shows
+  KPIs, transition matrix, conditional probabilities, and a color-strip
+  visualization of the candle direction sequence. Save runs to Supabase with
+  one click.
+- **History** — browse past runs with filters (source, label search, verdict).
+  Click any row to inspect full metrics.
+- **Charts** — track how hit rate, expectancy, or conditional probabilities
+  evolve over time across multiple tickers. Latest-run-per-label leaderboard
+  sorted by expectancy.
+
 ## Files
 
-- `momentum_persistence.py` — main script
-- `schema.sql` — Supabase table definition
+- `momentum_persistence.py` — analysis logic + CLI
+- `dashboard.py` — Streamlit UI
 - `.env.example` — template for credentials
 - `requirements.txt` — Python dependencies
+
+(Supabase table definition lives in `supabase/migrations/003_momentum_analysis_runs.sql` at the repo root.)
 
 ## License
 
