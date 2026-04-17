@@ -3,14 +3,14 @@
 import { useState } from 'react';
 import { analyze, parseOhlcCsv, type Candle, type MomentumReport } from '@/lib/momentum/analyze';
 
-type Source = 'binance' | 'csv';
+type Source = 'coinbase' | 'csv';
 
-const INTERVALS = ['1d', '4h', '1h', '15m', '5m'] as const;
+const INTERVALS = ['1d', '6h', '1h', '15m', '5m', '1m'] as const;
 type Interval = (typeof INTERVALS)[number];
 
 export function MomentumClient() {
-  const [source, setSource] = useState<Source>('binance');
-  const [symbol, setSymbol] = useState('BTCUSDT');
+  const [source, setSource] = useState<Source>('coinbase');
+  const [symbol, setSymbol] = useState('BTC-USD');
   const [interval, setInterval] = useState<Interval>('1d');
   const [limit, setLimit] = useState(365);
   const [keepDojis, setKeepDojis] = useState(false);
@@ -19,27 +19,26 @@ export function MomentumClient() {
   const [report, setReport] = useState<MomentumReport | null>(null);
   const [label, setLabel] = useState<string>('');
 
-  async function runBinance() {
+  async function runCoinbase() {
     setLoading(true);
     setError(null);
     setReport(null);
     try {
-      const url = `https://api.binance.com/api/v3/klines?symbol=${encodeURIComponent(
+      const bars = Math.min(Math.max(limit, 2), 2000);
+      const url = `/api/momentum/klines?symbol=${encodeURIComponent(
         symbol.toUpperCase()
-      )}&interval=${interval}&limit=${Math.min(Math.max(limit, 2), 1000)}`;
+      )}&interval=${interval}&bars=${bars}`;
       const res = await fetch(url);
-      if (!res.ok) throw new Error(`Binance error: ${res.status} ${res.statusText}`);
-      const rows = (await res.json()) as unknown[];
-      if (!Array.isArray(rows) || rows.length === 0) {
-        throw new Error('No candles returned.');
+      const body = (await res.json()) as
+        | { error: string }
+        | { candles: Candle[]; count: number };
+      if (!res.ok || 'error' in body) {
+        throw new Error('error' in body ? body.error : `Request failed: ${res.status}`);
       }
-      const candles: Candle[] = rows.map((r) => {
-        const arr = r as (string | number)[];
-        return { open: Number(arr[1]), close: Number(arr[4]) };
-      });
-      const r = analyze(candles, !keepDojis);
+      if (body.candles.length === 0) throw new Error('No candles returned.');
+      const r = analyze(body.candles, !keepDojis);
       setReport(r);
-      setLabel(`${symbol.toUpperCase()} (${interval}, ${candles.length} bars)`);
+      setLabel(`${symbol.toUpperCase()} (${interval}, ${body.candles.length} bars)`);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -69,12 +68,12 @@ export function MomentumClient() {
       <section className="rounded-lg border border-neutral-800 bg-neutral-900 p-6">
         <div className="mb-4 flex items-center gap-2 text-xs uppercase tracking-wide text-neutral-400">
           <button
-            onClick={() => setSource('binance')}
+            onClick={() => setSource('coinbase')}
             className={`rounded px-2 py-1 ${
-              source === 'binance' ? 'bg-neutral-800 text-white' : 'text-neutral-500'
+              source === 'coinbase' ? 'bg-neutral-800 text-white' : 'text-neutral-500'
             }`}
           >
-            Binance
+            Coinbase
           </button>
           <button
             onClick={() => setSource('csv')}
@@ -86,13 +85,13 @@ export function MomentumClient() {
           </button>
         </div>
 
-        {source === 'binance' ? (
+        {source === 'coinbase' ? (
           <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
             <LabeledInput
               label="Symbol"
               value={symbol}
               onChange={(v) => setSymbol(v)}
-              placeholder="BTCUSDT"
+              placeholder="BTC-USD"
             />
             <LabeledSelect
               label="Interval"
@@ -109,7 +108,7 @@ export function MomentumClient() {
             />
             <div className="flex items-end">
               <button
-                onClick={runBinance}
+                onClick={runCoinbase}
                 disabled={loading}
                 className="w-full rounded bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-50"
               >
