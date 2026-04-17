@@ -48,3 +48,12 @@ supabase/.env
 
 # OS
 Thumbs.db
+
+# Python (for python/ sidecars)
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+*.egg-info/
