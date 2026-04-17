@@ -2,6 +2,7 @@ import Link from 'next/link';
 
 const NAV = [
   { href: '/dashboard/analysts', label: 'Analysts' },
+  { href: '/dashboard/momentum', label: 'Momentum' },
   { href: '/dashboard/events', label: 'Events', disabled: true, note: 'Session 2' },
   { href: '/dashboard/strategies', label: 'Strategies', disabled: true, note: 'Session 5' },
   { href: '/dashboard/predictions', label: 'Predictions', disabled: true, note: 'Session 8' },
