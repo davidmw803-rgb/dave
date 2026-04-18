@@ -1,3 +1,50 @@
+# Polymarket paper-trade dashboard
+
+Live dashboard for the BTC 5m Polymarket paper-trading bot, built on top of the
+existing Next.js 14 / Supabase / Vercel setup. The dashboard reads from the
+`btc5m_paper_trades` table and supporting views (`btc5m_paper_summary`,
+`btc5m_trades_detailed`, `btc5m_seconds`).
+
+## Routes
+
+- `/` — tiles (open count, today realized P&L, 7d win rate, total closed), live
+  open-positions table, equity curve (last 500 closed)
+- `/trades` — filterable/sortable/paginated closed-trade log
+- `/markets/[slug]` — mid-price chart with paper-trade markers + trade list
+- `/strategy` — rolling 50-trade win rate / avg P&L, P&L histogram, STC buckets
+
+## Environment variables
+
+Set these in `.env.local` and in Vercel project settings:
+
+| Var | Used by | Scope |
+|-----|---------|-------|
+| `NEXT_PUBLIC_SUPABASE_URL` | browser + server | public |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | browser Realtime + client reads | public |
+| `SUPABASE_SERVICE_ROLE_KEY` | server components + `/api/live-mids` | **server only** |
+
+The service-role key is consumed via `lib/supabase/admin.ts`. Do **not** import
+that module from client components.
+
+## Live mids
+
+`/api/live-mids?ids=<comma_separated_asset_ids>` returns the latest
+`mid_before` / `price` per `asset_id` from `btc5m_trades_detailed`. The open
+positions table polls it every 2s when positions exist.
+
+## Realtime
+
+Browser clients subscribe to `postgres_changes` on `btc5m_paper_trades`; new
+opens prepend to the open-positions table, closes remove from it and refresh
+the equity curve / tiles.
+
+## Honesty guardrails
+
+- Every win-rate / avg-P&L tile shows sample size and greys out when `n < 30`.
+- `/strategy` shows a banner when total closed trades < 200.
+
+---
+
 # Trusted Analyst Rating Reaction & Prediction Engine
 
 A research and prediction system for tracking how trusted Wall Street analysts' rating actions move stocks, with a built-in prediction engine that learns from outcomes over time.
