@@ -130,6 +130,7 @@ export function OpenPositionsTable({ initialOpen, onOpenChange, onUnrealizedChan
         <TableRow>
           <TableHead>Market</TableHead>
           <TableHead>Side</TableHead>
+          <TableHead className="text-right">Size $</TableHead>
           <TableHead className="text-right">Entry</TableHead>
           <TableHead className="text-right">Mid</TableHead>
           <TableHead className="text-right">Stop</TableHead>
@@ -158,6 +159,9 @@ export function OpenPositionsTable({ initialOpen, onOpenChange, onUnrealizedChan
                 <Badge variant={t.side_token === 'YES' ? 'success' : 'danger'}>
                   {t.side_token}
                 </Badge>
+              </TableCell>
+              <TableCell className="text-right font-mono tabular-nums text-neutral-300">
+                {fmtUsd(t.entry_price * t.size_shares, 0)}
               </TableCell>
               <TableCell className="text-right font-mono tabular-nums">
                 {fmtPrice(t.entry_price)}

@@ -207,6 +207,7 @@ export function TradesClient({
                 </TableHead>
                 <TableHead>Slug</TableHead>
                 <TableHead>Side</TableHead>
+                <TableHead className="text-right">Size $</TableHead>
                 <TableHead className="text-right">Entry</TableHead>
                 <TableHead className="text-right">Exit</TableHead>
                 <TableHead>Reason</TableHead>
@@ -225,7 +226,7 @@ export function TradesClient({
             <TableBody>
               {trades.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={9} className="py-8 text-center text-xs text-neutral-500">
+                  <TableCell colSpan={10} className="py-8 text-center text-xs text-neutral-500">
                     No trades match these filters.
                   </TableCell>
                 </TableRow>
@@ -259,6 +260,9 @@ export function TradesClient({
                         <Badge variant={t.side_token === 'YES' ? 'success' : 'danger'}>
                           {t.side_token}
                         </Badge>
+                      </TableCell>
+                      <TableCell className="text-right font-mono tabular-nums text-neutral-300">
+                        {fmtUsd(t.entry_price * t.size_shares, 0)}
                       </TableCell>
                       <TableCell className="text-right font-mono tabular-nums">
                         {fmtPrice(t.entry_price)}

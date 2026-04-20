@@ -106,6 +106,7 @@ export default async function MarketPage({ params }: { params: { slug: string } 
                 <TableHead>Entry time</TableHead>
                 <TableHead>Strategy</TableHead>
                 <TableHead>Side</TableHead>
+                <TableHead className="text-right">Size $</TableHead>
                 <TableHead className="text-right">Entry</TableHead>
                 <TableHead className="text-right">Exit</TableHead>
                 <TableHead>Reason</TableHead>
@@ -118,7 +119,7 @@ export default async function MarketPage({ params }: { params: { slug: string } 
             <TableBody>
               {trades.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={10} className="py-6 text-center text-xs text-neutral-500">
+                  <TableCell colSpan={11} className="py-6 text-center text-xs text-neutral-500">
                     No paper trades on this market.
                   </TableCell>
                 </TableRow>
@@ -145,6 +146,9 @@ export default async function MarketPage({ params }: { params: { slug: string } 
                         <Badge variant={t.side_token === 'YES' ? 'success' : 'danger'}>
                           {t.side_token}
                         </Badge>
+                      </TableCell>
+                      <TableCell className="text-right font-mono tabular-nums text-neutral-300">
+                        {fmtUsd(t.entry_price * t.size_shares, 0)}
                       </TableCell>
                       <TableCell className="text-right font-mono tabular-nums">
                         {fmtPrice(t.entry_price)}
