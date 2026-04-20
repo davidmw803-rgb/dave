@@ -133,8 +133,21 @@ export function TradesView({ initial, initialSource, initialStrategy, initialDry
                       {t.exit_reason ? ` · ${t.exit_reason}` : ''}
                     </div>
                   </div>
-                  <div className={`ml-2 text-right font-mono tabular-nums text-sm ${t.status === 'OPEN' || t.status === 'PENDING' ? 'text-neutral-400' : pnlColor(pnl)}`}>
-                    {t.status === 'OPEN' || t.status === 'PENDING' ? 'OPEN' : pnlLabel}
+                  <div className="ml-2 flex flex-col items-end">
+                    {live && t.entry_amount_usd !== null ? (
+                      <span className="font-mono text-[10px] text-neutral-500">
+                        {fmtUsd(t.entry_amount_usd, 0)}
+                      </span>
+                    ) : null}
+                    <span
+                      className={`font-mono tabular-nums text-sm ${
+                        t.status === 'OPEN' || t.status === 'PENDING'
+                          ? 'text-neutral-400'
+                          : pnlColor(pnl)
+                      }`}
+                    >
+                      {t.status === 'OPEN' || t.status === 'PENDING' ? 'OPEN' : pnlLabel}
+                    </span>
                   </div>
                 </div>
               );

@@ -89,22 +89,29 @@ function OpenPosition({ t }: { t: LiveTrade }) {
     <div className="flex flex-col gap-0.5 border-b border-neutral-900 px-3 py-2 active:bg-neutral-900">
       <div className="flex items-center justify-between gap-2">
         <div className="font-mono text-xs text-neutral-200">{truncSlug(t.slug)}</div>
-        <span
-          className={`rounded px-1.5 py-px text-[10px] font-medium ${
-            t.side_token === 'YES'
-              ? 'bg-emerald-500/15 text-emerald-300'
-              : t.side_token === 'NO'
-                ? 'bg-red-500/15 text-red-300'
-                : 'bg-neutral-700/50 text-neutral-300'
-          }`}
-        >
-          {t.side_token ?? '—'}
-        </span>
+        <div className="flex items-center gap-1.5">
+          {t.entry_amount_usd !== null ? (
+            <span className="rounded bg-neutral-800 px-1.5 py-px font-mono text-[10px] text-neutral-200">
+              {fmtUsd(t.entry_amount_usd, 0)}
+            </span>
+          ) : null}
+          <span
+            className={`rounded px-1.5 py-px text-[10px] font-medium ${
+              t.side_token === 'YES'
+                ? 'bg-emerald-500/15 text-emerald-300'
+                : t.side_token === 'NO'
+                  ? 'bg-red-500/15 text-red-300'
+                  : 'bg-neutral-700/50 text-neutral-300'
+            }`}
+          >
+            {t.side_token ?? '—'}
+          </span>
+        </div>
       </div>
       <div className="flex items-center justify-between text-[11px] text-neutral-500">
         <span className="font-mono">{t.strategy}</span>
         <span className="font-mono">
-          {fmtPrice(t.entry_price)} · {mins === null ? '—' : `${mins}m`}
+          @ {fmtPrice(t.entry_price)} · {mins === null ? '—' : `${mins}m`}
         </span>
       </div>
     </div>
@@ -165,9 +172,23 @@ export function HomeView({ initial }: { initial: HomeData }) {
         </section>
 
         <section>
-          <h2 className="mb-2 text-xs font-medium uppercase tracking-wide text-neutral-400">
-            Open positions ({data.openPositions.length})
-          </h2>
+          <div className="mb-2 flex items-baseline justify-between">
+            <h2 className="text-xs font-medium uppercase tracking-wide text-neutral-400">
+              Open positions ({data.openPositions.length})
+            </h2>
+            {data.openPositions.length > 0 ? (
+              <span className="font-mono text-[11px] text-neutral-500">
+                {fmtUsd(
+                  data.openPositions.reduce(
+                    (s, t) => s + (t.entry_amount_usd ?? 0),
+                    0
+                  ),
+                  0
+                )}{' '}
+                deployed
+              </span>
+            ) : null}
+          </div>
           {data.openPositions.length === 0 ? (
             <div className="rounded border border-neutral-800 bg-neutral-900/40 p-4 text-center text-xs text-neutral-500">
               None.
