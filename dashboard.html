@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Poly Ops</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; margin: 0; }
+  body { font: 14px/1.45 -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+         background:#f6f7f9; color:#1a1d21; padding:18px; }
+  h1 { font-size:17px; margin-bottom:2px; }
+  .sub { color:#68707a; font-size:12px; margin-bottom:14px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:12px; }
+  .card { background:#fff; border:1px solid #e4e7eb; border-radius:10px; padding:14px 16px; }
+  .card h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:#68707a; margin-bottom:9px; }
+  .pill { display:inline-block; padding:2px 10px; border-radius:999px; font-size:12px; font-weight:600; }
+  .ok   { background:#e2f5e9; color:#177245; }
+  .warn { background:#fdf3d7; color:#8a6d00; }
+  .bad  { background:#fde3e3; color:#b3261e; }
+  .muted{ background:#eef0f3; color:#68707a; }
+  .kv { display:flex; justify-content:space-between; padding:3px 0; border-bottom:1px dashed #eef0f3; font-size:13px; }
+  .kv:last-child { border-bottom:none; }
+  .kv b { font-variant-numeric: tabular-nums; }
+  .bar { height:8px; background:#eef0f3; border-radius:4px; overflow:hidden; margin:6px 0 2px; }
+  .bar > div { height:100%; background:#3b82d9; border-radius:4px; }
+  pre { background:#f2f4f6; border-radius:6px; padding:8px 10px; font-size:11px; overflow-x:auto;
+        white-space:pre-wrap; word-break:break-all; color:#3c434b; margin-top:8px; }
+  table { width:100%; border-collapse:collapse; font-size:12.5px; }
+  th { text-align:left; color:#68707a; font-weight:600; padding:4px 6px; border-bottom:1px solid #e4e7eb; }
+  td { padding:4px 6px; border-bottom:1px solid #f0f2f4; font-variant-numeric:tabular-nums; }
+  #banner { display:none; background:#fde3e3; color:#b3261e; border:1px solid #f5c6c4;
+            border-radius:8px; padding:8px 12px; margin-bottom:12px; font-size:13px; white-space:pre-wrap; }
+  .age { font-size:11px; color:#9aa1a9; margin-top:6px; }
+  #gate { max-width:340px; margin:60px auto; background:#fff; border:1px solid #e4e7eb;
+          border-radius:12px; padding:22px; text-align:center; }
+  #gate input { width:100%; padding:9px 10px; margin:10px 0; border:1px solid #cdd3da; border-radius:8px; font-size:14px; }
+  #gate button, #lock { background:#3b82d9; color:#fff; border:none; border-radius:8px;
+          padding:8px 16px; font-size:13px; font-weight:600; cursor:pointer; }
+  #lock { float:right; background:#eef0f3; color:#68707a; padding:4px 10px; font-size:11px; }
+  #gateErr { color:#b3261e; font-size:12px; min-height:16px; }
+  #app { display:none; }
+</style>
+</head>
+<body>
+<div id="gate">
+  <h1>Poly Ops</h1>
+  <div class="sub">enter dashboard password</div>
+  <input id="pw" type="password" autocomplete="current-password" placeholder="password">
+  <div id="gateErr"></div>
+  <button onclick="unlock()">Unlock</button>
+</div>
+<div id="app">
+  <button id="lock" onclick="lock()">lock</button>
+  <h1>Poly Ops — relaunch dashboard</h1>
+  <div class="sub" id="fetched">loading…</div>
+  <div id="banner"></div>
+  <div class="grid">
+    <div class="card"><h2>1 · Archive pass (blocks deploy)</h2><div id="archive">…</div></div>
+    <div class="card"><h2>2 · Logger &amp; data feed</h2><div id="logger">…</div></div>
+    <div class="card"><h2>3 · favorite_60 dry-run gate</h2><div id="fav60">…</div></div>
+    <div class="card"><h2>4 · Server (159.65.217.138)</h2><div id="server">…</div></div>
+    <div class="card" style="grid-column:1/-1"><h2>5 · Copybot wallets</h2><div id="wallets">…</div></div>
+  </div>
+</div>
+<script>
+const FN_URL = "https://shwylcfhxmrunwjbunnf.supabase.co/functions/v1/poly-status";
+
+function showBanner(msg) { const b = document.getElementById("banner"); b.style.display = "block"; b.textContent = msg; }
+window.onerror = (m, src, line) => { showBanner("Dashboard script error: " + m + " (line " + line + ")"); return false; };
+
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const pill = (cls, txt) => `<span class="pill ${cls}">${esc(txt)}</span>`;
+const kv = (k, v) => `<div class="kv"><span>${k}</span><b>${v}</b></div>`;
+const agoM = (now, ts) => ts ? Math.round((new Date(now) - new Date(ts)) / 60000) : null;
+const fmtAgo = (m) => m == null ? "never" : m < 2 ? "just now" : m < 120 ? m + " min ago" : Math.round(m / 60) + " h ago";
+const put = (id, html) => { document.getElementById(id).innerHTML = html; };
+function section(id, fn, d) { try { fn(d); } catch (e) { put(id, pill("bad", "render error") + `<div class="age">${esc(e.message)}</div>`); } }
+
+function lock() {
+  localStorage.removeItem("polyDashPass");
+  document.getElementById("app").style.display = "none";
+  document.getElementById("gate").style.display = "block";
+}
+async function unlock() {
+  const pw = document.getElementById("pw").value;
+  if (!pw) return;
+  document.getElementById("gateErr").textContent = "checking…";
+  const ok = await load(pw);
+  if (ok) {
+    localStorage.setItem("polyDashPass", pw);
+    document.getElementById("gate").style.display = "none";
+    document.getElementById("app").style.display = "block";
+    document.getElementById("gateErr").textContent = "";
+  } else if (!document.getElementById("gateErr").textContent.includes("error")) {
+    document.getElementById("gateErr").textContent = "wrong password";
+  }
+}
+document.getElementById("pw").addEventListener("keydown", (e) => { if (e.key === "Enter") unlock(); });
+
+async function load(pw) {
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 35000);
+    const res = await fetch(FN_URL, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ password: pw }),
+      signal: ctrl.signal,
+    });
+    clearTimeout(timer);
+    if (res.status === 401) { lock(); return false; }
+    if (!res.ok) throw new Error("function returned " + res.status);
+    const d = await res.json();
+    section("archive", renderArchive, d);
+    section("logger", renderLogger, d);
+    section("fav60", renderFav, d);
+    section("server", renderServer, d);
+    section("wallets", renderWallets, d);
+    document.getElementById("fetched").textContent = "fetched " + new Date().toLocaleTimeString() + " — auto-refreshes every 60s";
+    document.getElementById("banner").style.display = "none";
+    return true;
+  } catch (e) {
+    const msg = e.name === "AbortError"
+      ? "Query timed out — the database may be saturated by the archive pass. Retrying in 60s."
+      : "Load error: " + (e.message || e);
+    if (document.getElementById("app").style.display !== "none") showBanner(msg);
+    else document.getElementById("gateErr").textContent = "error: " + msg;
+    return false;
+  }
+}
+
+function renderArchive(d) {
+  const a = d.archive, pass = a.pass && a.pass[0], done = a.marker > 0;
+  let h = done ? pill("ok", "COMPLETE — truncate + retention installed")
+        : pass ? pill("warn", "RUNNING " + String(pass.runtime).split(".")[0]) : pill("bad", "NOT RUNNING");
+  h += `<div class="bar"><div style="width:${done ? 100 : Math.min(99, Math.round((a.days / 31) * 100))}%"></div></div>`;
+  h += kv("days committed", a.days + " / 31 (single pass commits at end)");
+  h += kv("ticks written so far", (a.ticks_mb ?? 0) + " MB");
+  h += kv("cron jobs", esc((a.crons || []).join(", ") || "—"));
+  if (!done) h += `<div class="age">gate opens at completion; droplet then auto-starts daemons</div>`;
+  put("archive", h);
+}
+function renderLogger(d) {
+  const lg = d.logger, pcAge = agoM(d.now, lg.last_pc);
+  let h = (pcAge != null && pcAge < 3) ? pill("ok", "WRITING") : pill("bad", "DOWN since " + String(lg.last_pc || "?").slice(0, 10));
+  h += kv("last price_change", fmtAgo(pcAge));
+  h += kv("last trade", fmtAgo(agoM(d.now, lg.last_trade)));
+  h += kv("active markets", lg.active_markets);
+  put("logger", h);
+}
+function renderFav(d) {
+  const f = d.fav60 || {};
+  const days = (f.first_ts && f.last_ts) ? (new Date(f.last_ts) - new Date(f.first_ts)) / 86400000 : 0;
+  const passAll = days >= 5 && (f.closed || 0) >= 300 && (f.avg_cents || 0) >= 3;
+  let h = f.n > 0 ? (passAll ? pill("ok", "GATE PASSED — your call to go live") : pill("warn", "ACCUMULATING"))
+                  : pill("muted", "NOT STARTED — waits on logger");
+  h += kv("closed entries (need ≥300)", f.closed ?? 0);
+  h += kv("dry-run days (need ≥5)", days.toFixed(1));
+  h += kv("avg ¢/share (need ≥ +3)", f.avg_cents ?? "—");
+  h += kv("win rate", (f.wr ?? "—") + "%");
+  h += kv("net P&L (simulated)", "$" + (f.pnl ?? 0));
+  put("fav60", h);
+}
+function renderServer(d) {
+  const hb = d.hb;
+  if (!hb) { put("server", pill("muted", "NO HEARTBEAT YET") + `<div class="age">install the heartbeat cron on the droplet</div>`); return; }
+  const hbAge = agoM(d.now, hb.ts);
+  let h = (hbAge != null && hbAge < 3) ? pill("ok", "HEARTBEAT LIVE") : pill("warn", "STALE " + fmtAgo(hbAge));
+  h += " " + (hb.report_ready ? pill("ok", "M1 REPORT READY")
+        : hb.backtest_running ? pill("warn", "BACKTEST RUNNING") : pill("bad", "BACKTEST NOT RUNNING"));
+  h += kv("memory available", (hb.mem_avail_mb ?? "?") + " / " + (hb.mem_total_mb ?? "?") + " MB");
+  h += kv("swap used", (hb.swap_used_mb ?? 0) + " MB");
+  (hb.pm2 || []).forEach((p) => { h += kv("pm2 · " + esc(p.name), esc(p.status) + " · " + (p.mem_mb ?? "?") + "MB · ↺" + p.restarts); });
+  if (!hb.pm2 || !hb.pm2.length) h += kv("pm2 daemons", "none yet (archive gate)");
+  if (hb.backtest_tail) h += `<pre>${esc(hb.backtest_tail)}</pre>`;
+  if (hb.last_oom) h += `<div class="age">last OOM: ${esc(String(hb.last_oom).slice(0, 90))}</div>`;
+  put("server", h);
+}
+function renderWallets(d) {
+  const ws = d.wallets || [];
+  put("wallets", ws.length
+    ? `<table><tr><th>alias</th><th>status</th><th>via</th><th>mm</th><th>copy_score</th><th>address</th></tr>` +
+      ws.map((w) => `<tr><td>${esc(w.alias || "—")}</td><td>${esc(w.status)}</td><td>${esc(w.discovered_via || "")}</td>
+        <td>${w.mm === "true" ? "⚠️ bot" : w.mm == null ? "—" : "no"}</td>
+        <td>${esc(w.copy_score ?? "—")}</td><td style="color:#9aa1a9">${esc(String(w.address || "").slice(0, 10))}…</td></tr>`).join("") +
+      `</table><div class="age">scores populate when the M1 backtest runs with DB writes enabled</div>`
+    : "no wallets yet — M1 scout populates this");
+}
+
+// boot: reuse stored password, refresh every 60s while unlocked
+(async () => {
+  const saved = localStorage.getItem("polyDashPass");
+  if (saved) {
+    document.getElementById("pw").value = saved;
+    await unlock();
+  }
+  setInterval(() => {
+    const p = localStorage.getItem("polyDashPass");
+    if (p && document.getElementById("app").style.display !== "none") load(p);
+  }, 60000);
+})();
+</script>
+</body>
+</html>
