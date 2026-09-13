@@ -12,6 +12,55 @@ The app is split into three top-level sections in the global nav
 Adding a route means adding one entry to `NAV_SECTIONS`; the sub-tab row and the
 active-section highlight follow from it.
 
+## Access: one shared password
+
+Every route is behind a password gate (`middleware.ts`). There is **no
+environment variable to set** — the password lives in the database:
+
+- First visit to `/login` on a fresh install asks you to choose a password. It
+  is stored scrypt-hashed in `app_settings` under `app_password_hash`.
+- Change it any time on `/settings` (the current password is required).
+- `APP_PASSWORD` still works as an override when no password is stored.
+- Forgot it? Delete the `app_password_hash` row in Supabase; the next visit
+  goes back to the choose-a-password screen.
+
+Sessions are signed tokens — `v1.<expiry>.<hmac>` — in an HTTP-only,
+SameSite=Lax, Secure-over-HTTPS cookie lasting 30 days. The middleware verifies
+the signature and expiry on the edge with no database round trip, so it never
+needs the password itself. Signing key: `APP_SESSION_SECRET` if set, else
+`SETTINGS_SECRET`, else `SUPABASE_SERVICE_ROLE_KEY`; rotating whichever is in
+use signs everyone out.
+
+- API routes answer `401 JSON` instead of redirecting.
+- **A production deployment with no signing secret at all locks itself**, rather
+  than serving the data. In development it stays open.
+- Changing the password does *not* end sessions that are already signed in —
+  they run out at 30 days. Rotate the signing secret to cut them immediately.
+- Login attempts are throttled per IP (best-effort — serverless instances don't
+  share the counter, so a long password is the real protection).
+- The first-run screen is a genuine race on a fresh install: whoever reaches the
+  site first sets the password. Set one immediately after deploying, or set
+  `APP_PASSWORD` up front to close the window.
+- `public/dashboard.html` is exempt: it has its own token gate.
+
+## Settings: API keys in the app (`/settings`)
+
+Unusual Whales and TipRanks credentials can be entered in the UI instead of
+environment variables. They live in `app_settings`
+(`supabase/migrations/005_app_settings.sql`), encrypted with AES-256-GCM
+(`lib/settings/crypto.ts`); the table has RLS on with no policies, so only the
+service-role client reaches it.
+
+Resolution order for any credential: **saved in `/settings` → environment
+variable → built-in default**. Server code reads them through
+`getSetting()` in `lib/settings/store.ts`; the browser only ever sees the last
+four characters of a secret.
+
+The encryption key comes from `SETTINGS_SECRET` when set, otherwise it is
+derived from `SUPABASE_SERVICE_ROLE_KEY`. That means rotating the service-role
+key without setting `SETTINGS_SECRET` makes stored secrets undecryptable — the
+app falls back to env vars and you re-enter the keys on `/settings`.
+
 ## Unusual Whales x TipRanks (`/stocks/analysis`)
 
 One row per ticker, split into three column groups: options flow from Unusual

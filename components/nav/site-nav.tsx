@@ -14,6 +14,9 @@ export function SiteNav() {
   const pathname = usePathname();
   const active = sectionForPath(pathname);
 
+  // The login screen stands alone — no nav to a dashboard you can't reach yet.
+  if (pathname === '/login') return null;
+
   return (
     <header className="sticky top-0 z-30 border-b border-neutral-800 bg-neutral-950/90 backdrop-blur">
       {/* Row 1 — product mark + top-level sections */}
@@ -26,7 +29,7 @@ export function SiteNav() {
         </Link>
         <nav className="flex items-stretch gap-1 overflow-x-auto">
           {NAV_SECTIONS.map((s) => {
-            const isActive = s.id === active.id;
+            const isActive = s.id === active?.id;
             return (
               <Link
                 key={s.id}
@@ -46,9 +49,32 @@ export function SiteNav() {
             );
           })}
         </nav>
+
+        <div className="ml-auto flex items-center gap-1">
+          <Link
+            href="/settings"
+            className={cn(
+              'whitespace-nowrap rounded px-2.5 py-1 text-xs font-medium transition-colors',
+              isItemActive('/settings', pathname)
+                ? 'bg-neutral-800 text-neutral-100'
+                : 'text-neutral-500 hover:text-neutral-200'
+            )}
+          >
+            Settings
+          </Link>
+          <form action="/api/auth/logout" method="post">
+            <button
+              type="submit"
+              className="rounded px-2.5 py-1 text-xs font-medium text-neutral-500 transition-colors hover:text-neutral-200"
+            >
+              Log out
+            </button>
+          </form>
+        </div>
       </div>
 
-      {/* Row 2 — sub-tabs for the active section */}
+      {/* Row 2 — sub-tabs for the active section, when a section owns this route */}
+      {active ? (
       <div className="border-t border-neutral-900 bg-neutral-900/40">
         <div className="mx-auto flex w-full max-w-[100rem] items-center gap-1 overflow-x-auto px-4 py-2">
           {active.items.map((item) =>
@@ -82,6 +108,7 @@ export function SiteNav() {
           )}
         </div>
       </div>
+      ) : null}
     </header>
   );
 }

@@ -48,13 +48,18 @@ create table if not exists uw_tipranks_analysis (
   unique (ticker, as_of)
 );
 
+-- Reads and writes go through the service-role client, which bypasses RLS.
+-- RLS on with no policies keeps the anon key out entirely.
+alter table uw_tipranks_analysis enable row level security;
+
 create index if not exists idx_uw_tipranks_as_of on uw_tipranks_analysis (as_of desc);
 create index if not exists idx_uw_tipranks_ticker on uw_tipranks_analysis (ticker);
 create index if not exists idx_uw_tipranks_signal on uw_tipranks_analysis (signal);
 create index if not exists idx_uw_tipranks_composite on uw_tipranks_analysis (composite_score desc);
 
 -- Latest snapshot per ticker — what the dashboard shows by default.
-create or replace view uw_tipranks_latest as
+-- security_invoker so the view is subject to the caller's RLS, not the owner's.
+create or replace view uw_tipranks_latest with (security_invoker = true) as
 select distinct on (ticker) *
 from uw_tipranks_analysis
 order by ticker, as_of desc;
