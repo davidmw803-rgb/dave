@@ -12,6 +12,40 @@ The app is split into three top-level sections in the global nav
 Adding a route means adding one entry to `NAV_SECTIONS`; the sub-tab row and the
 active-section highlight follow from it.
 
+## Access: one shared password
+
+Every route is behind a password gate (`middleware.ts`). Set `APP_PASSWORD` —
+in Vercel project settings for production, in `.env.local` for local dev — and
+`/login` takes it from there.
+
+- The cookie stores `sha256(APP_PASSWORD)`, never the password, so changing the
+  password logs every session out.
+- HTTP-only, SameSite=Lax, Secure over HTTPS, 30-day expiry.
+- API routes answer `401 JSON` instead of redirecting.
+- **Unset password in production locks the app**, rather than serving the data
+  to anyone. In development an unset password leaves it open.
+- Login attempts are throttled per IP (best-effort — serverless instances don't
+  share the counter, so a long password is the real protection).
+- `public/dashboard.html` is exempt: it has its own token gate.
+
+## Settings: API keys in the app (`/settings`)
+
+Unusual Whales and TipRanks credentials can be entered in the UI instead of
+environment variables. They live in `app_settings`
+(`supabase/migrations/005_app_settings.sql`), encrypted with AES-256-GCM
+(`lib/settings/crypto.ts`); the table has RLS on with no policies, so only the
+service-role client reaches it.
+
+Resolution order for any credential: **saved in `/settings` → environment
+variable → built-in default**. Server code reads them through
+`getSetting()` in `lib/settings/store.ts`; the browser only ever sees the last
+four characters of a secret.
+
+The encryption key comes from `SETTINGS_SECRET` when set, otherwise it is
+derived from `SUPABASE_SERVICE_ROLE_KEY`. That means rotating the service-role
+key without setting `SETTINGS_SECRET` makes stored secrets undecryptable — the
+app falls back to env vars and you re-enter the keys on `/settings`.
+
 ## Unusual Whales x TipRanks (`/stocks/analysis`)
 
 One row per ticker, split into three column groups: options flow from Unusual

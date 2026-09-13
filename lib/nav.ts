@@ -57,9 +57,10 @@ export function isItemActive(href: string, pathname: string): boolean {
 /**
  * The section that owns `pathname` — the one with the longest matching path,
  * so `/dashboard/swings` lands on Polymarket rather than the first section
- * that happens to contain a `/dashboard/*` route.
+ * that happens to contain a `/dashboard/*` route. Null for routes that sit
+ * outside the sections entirely (/settings, /login).
  */
-export function sectionForPath(pathname: string): NavSection {
+export function sectionForPath(pathname: string): NavSection | null {
   let best: { section: NavSection; len: number } | null = null;
 
   for (const section of NAV_SECTIONS) {
@@ -70,7 +71,7 @@ export function sectionForPath(pathname: string): NavSection {
     }
   }
 
-  return best?.section ?? NAV_SECTIONS[1];
+  return best?.section ?? null;
 }
 
 export function sectionHref(section: NavSection): string {
