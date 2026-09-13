@@ -1,3 +1,38 @@
+# Trading desk — sections
+
+The app is split into three top-level sections in the global nav
+(`components/nav/site-nav.tsx`, config in `lib/nav.ts`):
+
+| Section | Routes |
+|---------|--------|
+| **Stock Analysis** | `/stocks/analysis` (Unusual Whales x TipRanks table), `/dashboard/analysts` |
+| **Polymarket** | `/`, `/trades`, `/live-trades`, `/strategy`, `/markets/[slug]`, `/dashboard/swings` |
+| **Crypto** | `/dashboard/momentum` |
+
+Adding a route means adding one entry to `NAV_SECTIONS`; the sub-tab row and the
+active-section highlight follow from it.
+
+## Unusual Whales x TipRanks (`/stocks/analysis`)
+
+One row per ticker, split into three column groups: options flow from Unusual
+Whales, analyst consensus from TipRanks, and the combined read (composite score
+0-100 + signal). Sortable on ticker, net premium, unusual score, upside, hit
+rate, composite score and updated-at; filterable by ticker/company search,
+sector, TipRanks consensus, minimum composite score and signal.
+
+Data comes from `uw_tipranks_analysis`
+(`supabase/migrations/004_uw_tipranks_analysis.sql`), read through the
+`uw_tipranks_latest` view — the newest snapshot per ticker. The page falls back
+to the base table if the view is missing, and to the built-in sample rows in
+`lib/stocks/sample.ts` if the table is empty or the Supabase env vars are unset.
+A banner marks sample rows so they are never mistaken for live data.
+
+Signals: `aligned_bull` / `aligned_bear` (flow and analysts agree), `divergent`
+(they disagree — e.g. heavy call flow under a below-spot price target),
+`neutral`.
+
+---
+
 # Polymarket paper-trade dashboard
 
 Live dashboard for the BTC 5m Polymarket paper-trading bot, built on top of the
