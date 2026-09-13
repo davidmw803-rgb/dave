@@ -33,9 +33,9 @@ export const SETTING_DEFS: SettingDefinition[] = [
     label: 'Unusual Whales base URL',
     description: 'Only change this if you are pointed at a proxy.',
     secret: false,
-    placeholder: 'https://api.unusualwhales.com/api',
+    placeholder: 'https://api.unusualwhales.com',
     envVar: 'UW_API_BASE_URL',
-    envDefault: 'https://api.unusualwhales.com/api',
+    envDefault: 'https://api.unusualwhales.com',
   },
   {
     key: 'tipranks_api_key',

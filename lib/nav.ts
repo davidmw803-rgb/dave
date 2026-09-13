@@ -20,9 +20,10 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     id: 'stocks',
     label: 'Stock Analysis',
-    href: '/stocks/analysis',
+    href: '/stocks/research',
     extraPaths: ['/stocks'],
     items: [
+      { href: '/stocks/research', label: 'Research' },
       { href: '/stocks/analysis', label: 'UW × TipRanks' },
       { href: '/dashboard/analysts', label: 'Trusted Analysts' },
       { href: '/dashboard/events', label: 'Rating Events', disabled: true, note: 'soon' },
