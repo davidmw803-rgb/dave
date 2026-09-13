@@ -61,6 +61,53 @@ derived from `SUPABASE_SERVICE_ROLE_KEY`. That means rotating the service-role
 key without setting `SETTINGS_SECRET` makes stored secrets undecryptable — the
 app falls back to env vars and you re-enter the keys on `/settings`.
 
+## Analyst rating research (`/stocks/research`)
+
+Pull analyst ratings from UW's screener, then enrich the rows you care about.
+
+**Filters split three ways**, because UW's API accepts far fewer than its website:
+
+| Tier | Fields | Cost |
+|---|---|---|
+| Sent to UW | ticker, action, recommendation, date range, max rows | narrows the fetch |
+| Filtered locally | firm, analyst, sector | free, no calls |
+| Needs enrichment first | market cap, price, upside % | one call per ticker |
+
+`GET /api/screener/analysts` returns only `ticker, analyst_name, firm,
+recommendation, action, sector, target, timestamp` — price, upside, market cap
+and company name come from `/api/stock/{ticker}/info` and `/quote`, which is why
+they are a separate button.
+
+**Three identities stop repeated pulls duplicating work** (`lib/research/`):
+
+1. `uw_analyst_ratings.event_key` — sha256 of ticker, analyst, firm, action,
+   recommendation, target and timestamp. The same rating found by five filters
+   is one row; re-pulls bump `last_seen_at` and leave `first_seen_at` alone.
+2. `uw_pull_runs` + `uw_pull_run_events` — every button press records its
+   filters and links to the ratings it surfaced, so provenance costs no
+   duplication.
+3. `api_call_cache.call_key` — one row per outbound call (`uw:info:AAPL`,
+   `uw:ohlc:AAPL:1d:2026-09-11`). Anything with a live entry is never requested
+   again. TTLs: info 24h, quote 1m, TipRanks 24h, elapsed price windows never.
+   Failures are cached for 5 minutes so a bad ticker can't cause a retry storm.
+
+Enrichment runs in batches of 20 per request, the client looping while
+`remaining > 0`, so no single request outlives a serverless function. Each pass
+reports fetched / cached / failed.
+
+Price history is stored per rating as windows off t0 — +1m, +5m, +30m, +1h, EOD,
++1d, +5d, +30d — from the OHLC endpoint, with the percentage move from t0.
+Windows still in the future are skipped and filled by a later run.
+
+TipRanks is the one unfinished piece: the cache key, TTL, batching, parsing and
+upsert are all in place, but the request itself is a stub in
+`lib/research/tipranks.ts` — TipRanks has no single public API, so it needs the
+shape from whichever product the key belongs to.
+
+Schema: `supabase/migrations/006_uw_research.sql`. The UI reads
+`uw_research_rows`, which joins ratings to whatever enrichment exists yet, so a
+pull is visible immediately with nulls where enrichment hasn't run.
+
 ## Unusual Whales x TipRanks (`/stocks/analysis`)
 
 One row per ticker, split into three column groups: options flow from Unusual
