@@ -14,18 +14,33 @@ active-section highlight follow from it.
 
 ## Access: one shared password
 
-Every route is behind a password gate (`middleware.ts`). Set `APP_PASSWORD` —
-in Vercel project settings for production, in `.env.local` for local dev — and
-`/login` takes it from there.
+Every route is behind a password gate (`middleware.ts`). There is **no
+environment variable to set** — the password lives in the database:
 
-- The cookie stores `sha256(APP_PASSWORD)`, never the password, so changing the
-  password logs every session out.
-- HTTP-only, SameSite=Lax, Secure over HTTPS, 30-day expiry.
+- First visit to `/login` on a fresh install asks you to choose a password. It
+  is stored scrypt-hashed in `app_settings` under `app_password_hash`.
+- Change it any time on `/settings` (the current password is required).
+- `APP_PASSWORD` still works as an override when no password is stored.
+- Forgot it? Delete the `app_password_hash` row in Supabase; the next visit
+  goes back to the choose-a-password screen.
+
+Sessions are signed tokens — `v1.<expiry>.<hmac>` — in an HTTP-only,
+SameSite=Lax, Secure-over-HTTPS cookie lasting 30 days. The middleware verifies
+the signature and expiry on the edge with no database round trip, so it never
+needs the password itself. Signing key: `APP_SESSION_SECRET` if set, else
+`SETTINGS_SECRET`, else `SUPABASE_SERVICE_ROLE_KEY`; rotating whichever is in
+use signs everyone out.
+
 - API routes answer `401 JSON` instead of redirecting.
-- **Unset password in production locks the app**, rather than serving the data
-  to anyone. In development an unset password leaves it open.
+- **A production deployment with no signing secret at all locks itself**, rather
+  than serving the data. In development it stays open.
+- Changing the password does *not* end sessions that are already signed in —
+  they run out at 30 days. Rotate the signing secret to cut them immediately.
 - Login attempts are throttled per IP (best-effort — serverless instances don't
   share the counter, so a long password is the real protection).
+- The first-run screen is a genuine race on a fresh install: whoever reaches the
+  site first sets the password. Set one immediately after deploying, or set
+  `APP_PASSWORD` up front to close the window.
 - `public/dashboard.html` is exempt: it has its own token gate.
 
 ## Settings: API keys in the app (`/settings`)

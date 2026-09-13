@@ -2,11 +2,10 @@ import { NextResponse, type NextRequest } from 'next/server';
 import {
   SESSION_COOKIE,
   SESSION_MAX_AGE_DAYS,
-  appPassword,
-  constantTimeEqual,
-  expectedSessionValue,
-  sha256Hex,
+  issueSessionToken,
+  sessionKeyMaterial,
 } from '@/lib/auth/session';
+import { checkPassword, passwordSource, setPassword } from '@/lib/auth/password';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -29,6 +28,27 @@ function tooManyAttempts(ip: string): boolean {
   return rec.count > MAX_ATTEMPTS;
 }
 
+async function sessionResponse(req: NextRequest, body: Record<string, unknown>) {
+  const token = await issueSessionToken();
+  if (!token) {
+    return NextResponse.json(
+      { error: 'Server cannot sign sessions: no session secret available.' },
+      { status: 503 }
+    );
+  }
+  const res = NextResponse.json(body);
+  res.cookies.set({
+    name: SESSION_COOKIE,
+    value: token,
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: req.nextUrl.protocol === 'https:',
+    path: '/',
+    maxAge: 60 * 60 * 24 * SESSION_MAX_AGE_DAYS,
+  });
+  return res;
+}
+
 export async function POST(req: NextRequest) {
   const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? 'unknown';
   if (tooManyAttempts(ip)) {
@@ -38,9 +58,9 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  if (!appPassword()) {
+  if (!sessionKeyMaterial()) {
     return NextResponse.json(
-      { error: 'APP_PASSWORD is not set on the server.' },
+      { error: 'Server is missing a session secret (SUPABASE_SERVICE_ROLE_KEY).' },
       { status: 503 }
     );
   }
@@ -53,23 +73,24 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Malformed request.' }, { status: 400 });
   }
 
-  const expected = await expectedSessionValue();
-  const provided = await sha256Hex(password);
-  if (!expected || !constantTimeEqual(provided, expected)) {
+  // First run: no password anywhere yet, so the first visitor sets one.
+  if ((await passwordSource()) === 'none') {
+    try {
+      await setPassword(password);
+    } catch (e) {
+      return NextResponse.json(
+        { error: e instanceof Error ? e.message : 'Could not set the password.' },
+        { status: 400 }
+      );
+    }
+    attempts.delete(ip);
+    return sessionResponse(req, { ok: true, created: true });
+  }
+
+  if (!(await checkPassword(password))) {
     return NextResponse.json({ error: 'Wrong password.' }, { status: 401 });
   }
 
   attempts.delete(ip);
-
-  const res = NextResponse.json({ ok: true });
-  res.cookies.set({
-    name: SESSION_COOKIE,
-    value: expected,
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: req.nextUrl.protocol === 'https:',
-    path: '/',
-    maxAge: 60 * 60 * 24 * SESSION_MAX_AGE_DAYS,
-  });
-  return res;
+  return sessionResponse(req, { ok: true });
 }

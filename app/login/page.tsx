@@ -1,14 +1,16 @@
 import { LoginForm } from '@/components/auth/login-form';
-import { appPassword } from '@/lib/auth/session';
+import { passwordSource } from '@/lib/auth/password';
+import { sessionKeyMaterial } from '@/lib/auth/session';
 
 export const dynamic = 'force-dynamic';
 
-export default function LoginPage({
+export default async function LoginPage({
   searchParams,
 }: {
   searchParams: { next?: string };
 }) {
-  const configured = appPassword() !== null;
+  const source = await passwordSource();
+  const canSignSessions = sessionKeyMaterial() !== null;
   const next =
     typeof searchParams.next === 'string' && searchParams.next.startsWith('/')
       ? searchParams.next
@@ -20,19 +22,23 @@ export default function LoginPage({
         <div className="font-mono text-sm font-semibold tracking-tight text-emerald-400">
           dave<span className="text-neutral-600">·</span>desk
         </div>
-        <h1 className="mt-2 text-xl font-semibold">Private dashboard</h1>
+        <h1 className="mt-2 text-xl font-semibold">
+          {source === 'none' ? 'Choose a password' : 'Private dashboard'}
+        </h1>
         <p className="mt-1 text-xs text-neutral-500">
-          Enter the shared password to reach the data.
+          {source === 'none'
+            ? 'No password is set yet. The one you enter here becomes the password for this dashboard.'
+            : 'Enter the shared password to reach the data.'}
         </p>
       </div>
 
-      {configured ? (
-        <LoginForm next={next} />
+      {canSignSessions ? (
+        <LoginForm next={next} firstRun={source === 'none'} />
       ) : (
         <div className="rounded border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-300">
-          <code>APP_PASSWORD</code> is not set on this deployment. Add it in the Vercel
-          project&apos;s environment variables (or <code>.env.local</code> locally) and
-          redeploy.
+          This deployment has no secret to sign sessions with. Set{' '}
+          <code>SUPABASE_SERVICE_ROLE_KEY</code> (or <code>APP_SESSION_SECRET</code>) in the
+          project&apos;s environment variables and redeploy.
         </div>
       )}
     </div>

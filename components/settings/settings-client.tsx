@@ -80,12 +80,12 @@ export function SettingsClient({ defs, initialStatuses, loadError }: Props) {
   };
 
   return (
-    <div className="mx-auto max-w-3xl space-y-4">
+    <div className="space-y-4">
       <div>
-        <h1 className="text-xl font-semibold">Settings</h1>
+        <h1 className="text-xl font-semibold">API credentials</h1>
         <p className="text-xs text-neutral-500">
-          API credentials for the data feeds. Secrets are encrypted before they are stored
-          and are never sent back to the browser — only the last four characters.
+          Keys for the data feeds. Secrets are encrypted before they are stored and are
+          never sent back to the browser — only the last four characters.
         </p>
       </div>
 

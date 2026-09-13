@@ -1,9 +1,9 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import {
   SESSION_COOKIE,
-  constantTimeEqual,
   devBypassAllowed,
-  expectedSessionValue,
+  sessionKeyMaterial,
+  verifySessionToken,
 } from '@/lib/auth/session';
 
 export const config = {
@@ -28,15 +28,11 @@ function unauthorized(req: NextRequest, reason: string): NextResponse {
 }
 
 export async function middleware(req: NextRequest): Promise<NextResponse> {
-  const expected = await expectedSessionValue();
-
-  if (!expected) {
+  if (!sessionKeyMaterial()) {
     if (devBypassAllowed()) return NextResponse.next();
-    return unauthorized(req, 'no-app-password-set');
+    return unauthorized(req, 'no-session-secret');
   }
 
-  const cookie = req.cookies.get(SESSION_COOKIE)?.value;
-  if (!cookie) return unauthorized(req, 'no-session');
-  if (!constantTimeEqual(cookie, expected)) return unauthorized(req, 'stale-session');
-  return NextResponse.next();
+  const ok = await verifySessionToken(req.cookies.get(SESSION_COOKIE)?.value);
+  return ok ? NextResponse.next() : unauthorized(req, 'no-session');
 }

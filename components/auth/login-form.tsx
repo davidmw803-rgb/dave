@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 
-export function LoginForm({ next }: { next: string }) {
+export function LoginForm({ next, firstRun }: { next: string; firstRun: boolean }) {
   const router = useRouter();
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -40,8 +40,8 @@ export function LoginForm({ next }: { next: string }) {
       <Input
         type="password"
         autoFocus
-        autoComplete="current-password"
-        placeholder="Password"
+        autoComplete={firstRun ? 'new-password' : 'current-password'}
+        placeholder={firstRun ? 'New password (min 8 characters)' : 'Password'}
         value={password}
         onChange={(e) => setPassword(e.target.value)}
       />
@@ -50,12 +50,17 @@ export function LoginForm({ next }: { next: string }) {
           {error}
         </div>
       ) : null}
-      <Button type="submit" disabled={pending || password.length === 0} className="w-full">
-        {pending ? 'Checking…' : 'Unlock'}
+      <Button
+        type="submit"
+        disabled={pending || password.length === 0}
+        className="w-full"
+      >
+        {pending ? 'Checking…' : firstRun ? 'Set password' : 'Unlock'}
       </Button>
       <p className="text-[11px] text-neutral-600">
-        The password is hashed into an HTTP-only cookie for 30 days. It is never stored in
-        the browser.
+        {firstRun
+          ? 'Stored as a scrypt hash in the database — never in plain text.'
+          : 'Sessions last 30 days in an HTTP-only cookie. The password is never stored in the browser.'}
       </p>
     </form>
   );
