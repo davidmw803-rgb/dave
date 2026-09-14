@@ -38,7 +38,47 @@ interface Props {
   uwConfigured: boolean;
 }
 
-type Progress = { label: string; done: number; total: number } | null;
+type Progress = { label: string; done: number; total: number; note?: string } | null;
+
+const REQUEST_TIMEOUT_MS = 90_000;
+
+/** POST JSON with a timeout, retrying a few times on network trouble. */
+async function postJson(
+  url: string,
+  body: unknown,
+  attempts = 3
+): Promise<{ ok: boolean; status: number; body: Record<string, unknown> }> {
+  let lastError: unknown = null;
+
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      const parsed = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+      return { ok: res.ok, status: res.status, body: parsed };
+    } catch (e) {
+      lastError = e;
+      // Back off before trying again: 1s, then 3s.
+      if (attempt < attempts - 1) {
+        await new Promise((r) => setTimeout(r, 1000 * (attempt * 2 + 1)));
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  const message =
+    lastError instanceof DOMException && lastError.name === 'AbortError'
+      ? 'The request timed out. Progress is saved — click again to carry on where it left off.'
+      : 'Network error. Progress is saved — click again to carry on where it left off.';
+  return { ok: false, status: 0, body: { error: message } };
+}
 
 /**
  * Numeric columns can arrive as numbers or as strings depending on the
@@ -246,36 +286,56 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
     let firstError: string | null = null;
 
     try {
+      let stalledPasses = 0;
+
       for (let guard = 0; guard < 200; guard++) {
         setProgress({
           label: kind === 'prices' ? 'Pulling price history' : 'Pulling TipRanks',
           done,
           total,
+          note: stalledPasses > 0 ? 'retrying…' : undefined,
         });
 
-        const res = await fetch('/api/research/enrich', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(
-            kind === 'prices'
-              ? { kind, eventKeys, batchSize: 20 }
-              : { kind, tickers: tickerList, batchSize: 20 }
-          ),
-        });
-        const body = await res.json().catch(() => ({}));
+        const res = await postJson(
+          '/api/research/enrich',
+          kind === 'prices'
+            ? { kind, eventKeys, batchSize: 20 }
+            : { kind, tickers: tickerList, batchSize: 20 }
+        );
+        const body = res.body as {
+          fetched?: number;
+          cached?: number;
+          failed?: number;
+          remaining?: number;
+          errors?: { ticker: string; error: string }[];
+          error?: string;
+        };
+
         if (!res.ok) {
-          setError(body?.error ?? 'Enrichment failed.');
+          setError(body.error ?? 'Enrichment failed.');
           break;
         }
 
         fetched += body.fetched ?? 0;
         cached += body.cached ?? 0;
         failed += body.failed ?? 0;
-        if (!firstError && Array.isArray(body.errors) && body.errors.length > 0) {
+        if (!firstError && body.errors && body.errors.length > 0) {
           firstError = `${body.errors[0].ticker}: ${body.errors[0].error}`;
         }
+
+        const previousDone = done;
         done = Math.max(0, total - (body.remaining ?? 0));
         if ((body.remaining ?? 0) <= 0) break;
+
+        // A pass that moves nothing means the remaining rows can't be
+        // satisfied — stop rather than spin, and say so.
+        stalledPasses = done > previousDone ? 0 : stalledPasses + 1;
+        if (stalledPasses >= 3) {
+          setError(
+            `Stopped at ${done} of ${total}: the last three passes made no progress, so the rest can't be completed right now. ${failed > 0 ? `${failed} failed${firstError ? ` — first: ${firstError}` : ''}.` : ''}`
+          );
+          break;
+        }
       }
 
       // Win rates key off the +1d moves that just landed.
@@ -453,6 +513,7 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
       {progress ? (
         <div className="rounded border border-neutral-800 bg-neutral-900/60 p-3 text-xs text-neutral-300">
           {progress.label}: {progress.done} / {progress.total}
+          {progress.note ? <span className="ml-2 text-amber-400">{progress.note}</span> : null}
           <div className="mt-2 h-1 w-full overflow-hidden rounded bg-neutral-800">
             <div
               className="h-full bg-emerald-500 transition-all"
