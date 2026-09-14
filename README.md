@@ -125,8 +125,8 @@ endpoint, with the percentage move from t0. The full daily series costs no extra
 API calls: a ticker's daily bars arrive in one request covering three months, so
 all thirty windows are read from a response already being fetched.
 
-The table shows a readable subset of the daily block by default and toggles to
-all 37 windows; exports always contain every one. Windows still in the future are skipped; a rating counts as done
+The table shows all 37 windows and scrolls sideways to reach them, with the
+ticker pinned so rows stay identifiable. Exports contain every one. Windows still in the future are skipped; a rating counts as done
 only when every window that *should* exist by now does, so a later run fills
 them in as time passes.
 

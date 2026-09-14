@@ -58,21 +58,6 @@ export const DAY_WINDOWS = Array.from(
 /** Every window we measure around a rating, in table order. */
 export const MOVE_WINDOWS: readonly string[] = [...INTRADAY_WINDOWS, ...DAY_WINDOWS];
 
-/**
- * The subset shown when the daily block is collapsed — enough to see the shape
- * of the drift without 30 columns of it.
- */
-export const KEY_DAY_WINDOWS: readonly string[] = [
-  't+1d',
-  't+2d',
-  't+5d',
-  't+10d',
-  't+20d',
-  't+30d',
-];
-
-export const KEY_WINDOWS: readonly string[] = [...INTRADAY_WINDOWS, ...KEY_DAY_WINDOWS];
-
 export type MoveWindow = string;
 
 export interface MoveCell {
