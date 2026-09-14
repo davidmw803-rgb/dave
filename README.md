@@ -169,6 +169,11 @@ upsert are all in place, but the request itself is a stub in
 `lib/research/tipranks.ts` — TipRanks has no single public API, so it needs the
 shape from whichever product the key belongs to.
 
+`uw_research_rows` aggregates the window table once and hash-joins it. Do not
+rebuild `moves` with a correlated subquery: that runs one aggregate per row, and
+at ~10 windows per rating a 500-row page took 5.7s of an 8s statement timeout —
+measured 5771ms against 32ms for the single-pass form, on identical data.
+
 Schema: `supabase/migrations/006_uw_research.sql`. The UI reads
 `uw_research_rows`, which joins ratings to whatever enrichment exists yet, so a
 pull is visible immediately with nulls where enrichment hasn't run.
