@@ -118,6 +118,7 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
   const [busy, setBusy] = useState<string | null>(null);
   const [progress, setProgress] = useState<Progress>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [stale, setStale] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Tier 1 — sent to Unusual Whales
@@ -221,11 +222,36 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
     [filtered, selected]
   );
 
-  const refresh = useCallback(async (runId?: string) => {
+  /**
+   * Reload the table. A failure here used to be invisible: the fetch would
+   * return something unparseable, `rows` kept its old value, and the header
+   * quietly showed a stale count with no hint that the table was out of date.
+   * Now it retries, and says so when it can't.
+   */
+  const refresh = useCallback(async (runId?: string): Promise<boolean> => {
     const qs = runId ? `?runId=${encodeURIComponent(runId)}` : '';
-    const res = await fetch(`/api/research/rows${qs}`);
-    const body = await res.json().catch(() => ({}));
-    if (Array.isArray(body.rows)) setRows(body.rows as ResearchRow[]);
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+      try {
+        const res = await fetch(`/api/research/rows${qs}`, { signal: controller.signal });
+        const body = (await res.json().catch(() => null)) as { rows?: unknown } | null;
+        if (res.ok && body && Array.isArray(body.rows)) {
+          setRows(body.rows as ResearchRow[]);
+          setStale(false);
+          return true;
+        }
+      } catch {
+        // Fall through to the retry.
+      } finally {
+        clearTimeout(timer);
+      }
+      if (attempt < 2) await new Promise((r) => setTimeout(r, 1000 * (attempt * 2 + 1)));
+    }
+
+    setStale(true);
+    return false;
   }, []);
 
   const pull = async () => {
@@ -503,6 +529,17 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
       {error ? (
         <div className="rounded border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-300">
           {error}
+        </div>
+      ) : null}
+      {stale ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-300">
+          <span>
+            The table below could not be reloaded, so it may be out of date — the pull
+            itself is saved.
+          </span>
+          <Button variant="outline" size="sm" onClick={() => refresh()}>
+            Reload table
+          </Button>
         </div>
       ) : null}
       {message ? (

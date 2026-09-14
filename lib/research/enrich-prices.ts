@@ -278,6 +278,14 @@ async function enrichEventWindows(
     .from('uw_event_price_windows')
     .upsert(rows, { onConflict: 'event_key,window_label' });
   if (error) throw new Error(error.message);
+
+  // Stamp the rating so the next pass can tell it is current without reading
+  // its window rows back.
+  const { error: stampError } = await supabase
+    .from('uw_analyst_ratings')
+    .update({ windows_pulled_at: new Date().toISOString() })
+    .eq('event_key', event.event_key);
+  if (stampError) throw new Error(stampError.message);
 }
 
 /**
@@ -293,30 +301,42 @@ export async function enrichPrices(
   const supabase = createAdminClient();
   const client = await UnusualWhalesClient.create();
 
-  const { data: events, error } = await supabase
-    .from('uw_analyst_ratings')
-    .select('event_key, ticker, rated_at')
-    .in('event_key', eventKeys.slice(0, 1000));
-  if (error) throw new Error(error.message);
-
-  // A rating is done only when every window that *should* exist by now does.
-  // Anything priced before its +1d had elapsed gets picked up again later.
-  const { data: stored } = await supabase
-    .from('uw_event_price_windows')
-    .select('event_key, window_label')
-    .in('event_key', eventKeys.slice(0, 1000));
-
-  const have = new Map<string, Set<string>>();
-  for (const row of stored ?? []) {
-    const key = row.event_key as string;
-    if (!have.has(key)) have.set(key, new Set());
-    have.get(key)!.add(row.window_label as string);
+  // Read the ratings in chunks: a few hundred keys in one `in.()` makes for a
+  // very long URL, and the response is capped at 1000 rows regardless.
+  interface EventRow {
+    event_key: string;
+    ticker: string;
+    rated_at: string;
+    windows_pulled_at: string | null;
   }
 
-  const todo = (events ?? []).filter((e) => {
+  const events: EventRow[] = [];
+  for (let i = 0; i < eventKeys.length; i += 100) {
+    const { data, error } = await supabase
+      .from('uw_analyst_ratings')
+      .select('event_key, ticker, rated_at, windows_pulled_at')
+      .in('event_key', eventKeys.slice(i, i + 100));
+    if (error) throw new Error(error.message);
+    events.push(...((data ?? []) as EventRow[]));
+  }
+
+  /**
+   * A rating needs work when more windows should exist now than existed when
+   * it was last pulled — so a rating priced an hour in comes back once its +1d
+   * has elapsed. Comparing two counts on the rating itself keeps this O(1) per
+   * row; the previous version read every window row back and silently lost
+   * everything past the 1000-row response cap, which froze the run at ~100.
+   */
+  const now = Date.now();
+  const todo = events.filter((e) => {
     if (force) return true;
-    const labels = have.get(e.event_key as string) ?? new Set<string>();
-    return expectedWindows(e.rated_at as string).some((w) => !labels.has(w));
+    if (!e.windows_pulled_at) return true;
+    const expectedNow = expectedWindows(e.rated_at, now).length;
+    const expectedThen = expectedWindows(
+      e.rated_at,
+      new Date(e.windows_pulled_at).getTime()
+    ).length;
+    return expectedNow > expectedThen;
   });
   const batch = todo.slice(0, batchSize);
 
