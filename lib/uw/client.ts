@@ -42,6 +42,8 @@ export interface AnalystRatingRaw {
 export type CandleSize = '1m' | '5m' | '10m' | '15m' | '30m' | '1h' | '4h' | '1d' | '1w';
 
 export interface OhlcBarRaw {
+  /** Daily and weekly bars are dated; intraday bars use start_time/end_time. */
+  date?: string;
   open?: string;
   high?: string;
   low?: string;

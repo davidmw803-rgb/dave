@@ -15,7 +15,12 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
-import { RATING_ACTIONS, RECOMMENDATIONS, type ResearchRow } from '@/lib/research/types';
+import {
+  MOVE_WINDOWS,
+  RATING_ACTIONS,
+  RECOMMENDATIONS,
+  type ResearchRow,
+} from '@/lib/research/types';
 import { fmtPct, fmtPrice, signColor } from '@/lib/stocks/format';
 
 interface Props {
@@ -210,6 +215,72 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
     }
   };
 
+  /** One row's worth of enrichment, from the buttons in the row itself. */
+  const enrichRow = async (row: ResearchRow, kind: 'prices' | 'tipranks') => {
+    setBusy(`${kind}:${row.event_key}`);
+    setError(null);
+    setMessage(null);
+    try {
+      const res = await fetch('/api/research/enrich', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(
+          kind === 'prices'
+            ? { kind, eventKeys: [row.event_key], batchSize: 1, force: true }
+            : { kind, tickers: [row.ticker], batchSize: 1 }
+        ),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(body?.error ?? 'Enrichment failed.');
+        return;
+      }
+      if (body.failed > 0 && Array.isArray(body.errors) && body.errors.length > 0) {
+        setError(`${body.errors[0].ticker}: ${body.errors[0].error}`);
+      } else {
+        setMessage(
+          `${row.ticker}: ${body.fetched} fetched, ${body.cached} cached`
+        );
+      }
+      await refresh();
+    } catch {
+      setError('Network error.');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  /**
+   * Recompute analyst stats. With no keys it refreshes every analyst in the
+   * table; with one key it refreshes just that analyst — and because the stats
+   * are keyed by analyst, the result lands on every rating they made.
+   */
+  const refreshAnalysts = async (analystKeys?: string[]) => {
+    setBusy(analystKeys?.length === 1 ? `analyst:${analystKeys[0]}` : 'analysts');
+    setError(null);
+    setMessage(null);
+    try {
+      const res = await fetch('/api/research/analysts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ analystKeys: analystKeys ?? [] }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(body?.error ?? 'Analyst refresh failed.');
+        return;
+      }
+      setMessage(
+        `Analyst stats refreshed: ${body.analysts} analyst${body.analysts === 1 ? '' : 's'} · ${body.scoredRatings} scored ratings`
+      );
+      await refresh();
+    } catch {
+      setError('Network error.');
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const toggleRow = (key: string) => {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -256,6 +327,14 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
             disabled={anyBusy || filtered.length === 0}
           >
             {busy === 'tipranks' ? 'Pulling…' : 'Pull TipRanks'}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => refreshAnalysts()}
+            disabled={anyBusy || rows.length === 0}
+          >
+            {busy === 'analysts' ? 'Refreshing…' : 'Refresh analysts'}
           </Button>
         </div>
       </div>
@@ -463,21 +542,29 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
                 <TableHead>Action</TableHead>
                 <TableHead>Rating</TableHead>
                 <TableHead className="text-right">Target</TableHead>
-                <TableHead className="text-right">Price</TableHead>
+                <TableHead className="text-right">Price @ rating</TableHead>
+                <TableHead className="text-right">Current</TableHead>
                 <TableHead className="text-right">Upside</TableHead>
-                <TableHead className="text-right">+1d</TableHead>
-                <TableHead className="text-right">+5d</TableHead>
-                <TableHead className="text-right">+30d</TableHead>
+                <TableHead className="border-r border-neutral-800 text-right">Since</TableHead>
+                {MOVE_WINDOWS.map((w) => (
+                  <TableHead key={w} className="whitespace-nowrap text-right">
+                    {w.replace('t+', '+')}
+                  </TableHead>
+                ))}
+                <TableHead className="border-l border-neutral-800 text-right">An. n</TableHead>
+                <TableHead className="text-right">An. win%</TableHead>
+                <TableHead className="border-r border-neutral-800 text-right">An. +1d</TableHead>
                 <TableHead>Sector</TableHead>
                 <TableHead className="text-right">Mkt cap</TableHead>
                 <TableHead>TR</TableHead>
                 <TableHead className="text-right">TR PT</TableHead>
+                <TableHead className="text-right">Pull</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {filtered.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={18} className="py-8 text-center text-xs text-neutral-500">
+                  <TableCell colSpan={30} className="py-8 text-center text-xs text-neutral-500">
                     No ratings yet. Set your filters and hit <strong>Pull ratings</strong>.
                   </TableCell>
                 </TableRow>
@@ -519,21 +606,60 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
                       {fmtPrice(r.target)}
                     </TableCell>
                     <TableCell className="text-right font-mono tabular-nums text-neutral-300">
-                      {fmtPrice(r.last_price)}
+                      {fmtPrice(r.price_at_rating)}
+                    </TableCell>
+                    <TableCell
+                      className="text-right font-mono tabular-nums text-neutral-100"
+                      title={
+                        r.current_price_at
+                          ? `as of ${new Date(r.current_price_at).toLocaleString()}`
+                          : undefined
+                      }
+                    >
+                      {fmtPrice(r.current_price)}
                     </TableCell>
                     <TableCell
                       className={`text-right font-mono tabular-nums ${signColor(r.upside_pct)}`}
                     >
                       {fmtPct(r.upside_pct)}
                     </TableCell>
-                    <TableCell className={`text-right font-mono tabular-nums ${signColor(r.move_1d_pct)}`}>
-                      {fmtPct(r.move_1d_pct)}
+                    <TableCell
+                      className={`border-r border-neutral-800 text-right font-mono tabular-nums ${signColor(r.move_since_rating_pct)}`}
+                    >
+                      {fmtPct(r.move_since_rating_pct)}
                     </TableCell>
-                    <TableCell className={`text-right font-mono tabular-nums ${signColor(r.move_5d_pct)}`}>
-                      {fmtPct(r.move_5d_pct)}
+                    {MOVE_WINDOWS.map((w) => {
+                      const cell = r.moves?.[w];
+                      const pct = cell?.pct ?? null;
+                      return (
+                        <TableCell
+                          key={w}
+                          className={`text-right font-mono tabular-nums ${signColor(pct)}`}
+                          title={cell?.price ? `${fmtPrice(cell.price)} at ${w}` : undefined}
+                        >
+                          {fmtPct(pct)}
+                        </TableCell>
+                      );
+                    })}
+                    <TableCell className="border-l border-neutral-800 text-right font-mono tabular-nums text-neutral-400">
+                      {r.analyst_ratings_count ?? '—'}
                     </TableCell>
-                    <TableCell className={`text-right font-mono tabular-nums ${signColor(r.move_30d_pct)}`}>
-                      {fmtPct(r.move_30d_pct)}
+                    <TableCell
+                      className="text-right font-mono tabular-nums text-neutral-300"
+                      title={
+                        r.analyst_scored_ratings
+                          ? `${r.analyst_scored_ratings} scored ratings`
+                          : undefined
+                      }
+                    >
+                      {r.analyst_win_rate_1d === null
+                        ? '—'
+                        : `${r.analyst_win_rate_1d.toFixed(0)}%`}
+                    </TableCell>
+                    <TableCell
+                      className={`border-r border-neutral-800 text-right font-mono tabular-nums ${signColor(r.analyst_avg_move_1d)}`}
+                    >
+                      {fmtPct(r.analyst_avg_move_1d)}
                     </TableCell>
                     <TableCell className="whitespace-nowrap text-xs text-neutral-400">
                       {r.sector ?? '—'}
@@ -546,6 +672,34 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
                     </TableCell>
                     <TableCell className="text-right font-mono tabular-nums text-neutral-300">
                       {fmtPrice(r.tr_price_target)}
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap text-right">
+                      <div className="flex items-center justify-end gap-1">
+                        <button
+                          onClick={() => enrichRow(r, 'prices')}
+                          disabled={anyBusy}
+                          title="Pull price history for this rating"
+                          className="rounded border border-neutral-700 px-1.5 py-0.5 text-[10px] text-neutral-300 transition-colors hover:bg-neutral-800 disabled:opacity-40"
+                        >
+                          {busy === `prices:${r.event_key}` ? '…' : r.has_prices ? '↻ px' : 'px'}
+                        </button>
+                        <button
+                          onClick={() => enrichRow(r, 'tipranks')}
+                          disabled={anyBusy}
+                          title="Pull TipRanks for this ticker"
+                          className="rounded border border-neutral-700 px-1.5 py-0.5 text-[10px] text-neutral-300 transition-colors hover:bg-neutral-800 disabled:opacity-40"
+                        >
+                          {busy === `tipranks:${r.event_key}` ? '…' : r.has_tipranks ? '↻ TR' : 'TR'}
+                        </button>
+                        <button
+                          onClick={() => r.analyst_key && refreshAnalysts([r.analyst_key])}
+                          disabled={anyBusy || !r.analyst_key}
+                          title="Refresh this analyst's stats — updates every rating they made"
+                          className="rounded border border-neutral-700 px-1.5 py-0.5 text-[10px] text-neutral-300 transition-colors hover:bg-neutral-800 disabled:opacity-40"
+                        >
+                          {busy === `analyst:${r.analyst_key}` ? '…' : r.has_analyst ? '↻ an' : 'an'}
+                        </button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))
