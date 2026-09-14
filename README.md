@@ -120,8 +120,13 @@ that read crosses PostgREST's 1000-row response cap once ~100 ratings are
 priced, everything past the cap looks unpriced, and the loop never finishes.
 
 Price history is stored per rating as windows off t0 — +1m, +5m, +15m, +30m,
-+1h, +4h, EOD, +1d, +5d, +30d — from the OHLC endpoint, with the percentage
-move from t0. Windows still in the future are skipped; a rating counts as done
++1h, +4h, EOD, then every calendar day from +1d to +30d — from the OHLC
+endpoint, with the percentage move from t0. The full daily series costs no extra
+API calls: a ticker's daily bars arrive in one request covering three months, so
+all thirty windows are read from a response already being fetched.
+
+The table shows a readable subset of the daily block by default and toggles to
+all 37 windows; exports always contain every one. Windows still in the future are skipped; a rating counts as done
 only when every window that *should* exist by now does, so a later run fills
 them in as time passes.
 
@@ -139,6 +144,16 @@ The table shows the price at the rating and the current price side by side, so
 `Since` is the move since publication and `Upside` is the target against the
 latest quote. Each row also carries its own buttons to pull price history,
 TipRanks, or refresh that analyst.
+
+**Export CSV** downloads whatever the filters currently show — every matching
+row, not just the 300 rendered — or only the ticked rows when there is a
+selection. The count on the button is what will be written.
+
+The file is built for analysis rather than for reading: raw numbers with no `%`
+or `$`, empty cells rather than `—`, and the timestamp carried four ways (UTC
+instant, plus ET date, time, weekday and session), because the questions worth
+asking here are about market time and re-deriving it downstream is where
+mistakes creep in. The filename records the filters that produced it.
 
 **Analyst stats** live in `research_analysts`, keyed by `lower(name)|lower(firm)`
 — a generated column on the ratings table, so one refresh lands on every rating

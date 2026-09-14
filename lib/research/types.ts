@@ -38,8 +38,8 @@ export interface EnrichResult {
   errors: { ticker: string; error: string }[];
 }
 
-/** Every window we measure around a rating, in table order. */
-export const MOVE_WINDOWS = [
+/** The intraday windows around a rating, in table order. */
+export const INTRADAY_WINDOWS = [
   't+1m',
   't+5m',
   't+15m',
@@ -47,12 +47,33 @@ export const MOVE_WINDOWS = [
   't+1h',
   't+4h',
   'eod',
-  't+1d',
-  't+5d',
-  't+30d',
 ] as const;
 
-export type MoveWindow = (typeof MOVE_WINDOWS)[number];
+/** Every calendar day out to +30. */
+export const DAY_WINDOWS = Array.from(
+  { length: 30 },
+  (_, i) => `t+${i + 1}d`
+) as readonly string[];
+
+/** Every window we measure around a rating, in table order. */
+export const MOVE_WINDOWS: readonly string[] = [...INTRADAY_WINDOWS, ...DAY_WINDOWS];
+
+/**
+ * The subset shown when the daily block is collapsed — enough to see the shape
+ * of the drift without 30 columns of it.
+ */
+export const KEY_DAY_WINDOWS: readonly string[] = [
+  't+1d',
+  't+2d',
+  't+5d',
+  't+10d',
+  't+20d',
+  't+30d',
+];
+
+export const KEY_WINDOWS: readonly string[] = [...INTRADAY_WINDOWS, ...KEY_DAY_WINDOWS];
+
+export type MoveWindow = string;
 
 export interface MoveCell {
   price: number | null;
@@ -80,7 +101,7 @@ export interface ResearchRow {
   current_price_at: string | null;
   upside_pct: number | null;
   move_since_rating_pct: number | null;
-  moves: Partial<Record<MoveWindow | 't0', MoveCell>> | null;
+  moves: Record<string, MoveCell | undefined> | null;
   analyst_ratings_count: number | null;
   analyst_avg_move_1d: number | null;
   analyst_win_rate_1d: number | null;

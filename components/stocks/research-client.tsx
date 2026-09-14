@@ -17,12 +17,14 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import {
+  KEY_WINDOWS,
   MOVE_WINDOWS,
   RATING_ACTIONS,
   RECOMMENDATIONS,
   type ResearchRow,
 } from '@/lib/research/types';
 import { fmtPct, fmtPrice, signColor } from '@/lib/stocks/format';
+import { csvFilename, toCsv } from '@/lib/research/export';
 import {
   TIME_PRESETS,
   WEEKDAYS,
@@ -119,6 +121,8 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
   const [progress, setProgress] = useState<Progress>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [stale, setStale] = useState(false);
+  // 37 windows is a lot of table; the daily block collapses to key days.
+  const [allWindows, setAllWindows] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Tier 1 — sent to Unusual Whales
@@ -139,6 +143,8 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
   const [weekdays, setWeekdays] = useState<Set<number>>(new Set());
   const [timeFrom, setTimeFrom] = useState('');
   const [timeTo, setTimeTo] = useState('');
+
+  const shownWindows = allWindows ? MOVE_WINDOWS : KEY_WINDOWS;
 
   const firms = useMemo(
     () => Array.from(new Set(rows.map((r) => r.firm).filter((f): f is string => !!f))).sort(),
@@ -457,6 +463,46 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
     }
   };
 
+  const exportCsv = () => {
+    if (targetRows.length === 0) {
+      setError('Nothing to export — no rows match these filters.');
+      return;
+    }
+    setError(null);
+
+    const csv = toCsv(targetRows);
+    const name = csvFilename(
+      {
+        tickers,
+        action,
+        recommendation,
+        from: newerThan,
+        to: olderThan,
+        firm,
+        sector,
+        analyst,
+        weekdays: WEEKDAYS.filter((d) => weekdays.has(d.value)).map((d) => d.label),
+        timeFrom,
+        timeTo,
+      },
+      targetRows.length
+    );
+
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = name;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    // Give the download a tick to start before the blob goes away.
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+
+    setMessage(
+      `Exported ${targetRows.length.toLocaleString()} row${targetRows.length === 1 ? '' : 's'} to ${name}`
+    );
+  };
+
   const toggleRow = (key: string) => {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -482,6 +528,17 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
             Pull ratings from Unusual Whales, then enrich the rows you care about ·{' '}
             {filtered.length.toLocaleString()} of {rows.length.toLocaleString()} rows
             {selected.size > 0 ? ` · ${selected.size} selected` : ''}
+            {' · '}
+            <button
+              onClick={() => setAllWindows((v) => !v)}
+              className="underline decoration-dotted underline-offset-2 hover:text-neutral-300"
+            >
+              {allWindows
+                ? `showing all ${MOVE_WINDOWS.length} windows`
+                : `showing ${KEY_WINDOWS.length} key windows`}
+            </button>
+            {' (exports always include all '}
+            {MOVE_WINDOWS.length})
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -511,6 +568,15 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
             disabled={anyBusy || rows.length === 0}
           >
             {busy === 'analysts' ? 'Refreshing…' : 'Refresh analysts'}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={exportCsv}
+            disabled={targetRows.length === 0}
+            title="Download the rows these filters show, as CSV"
+          >
+            Export CSV ({targetRows.length.toLocaleString()})
           </Button>
         </div>
       </div>
@@ -862,7 +928,7 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
                 <TableHead className="text-right">Current</TableHead>
                 <TableHead className="text-right">Upside</TableHead>
                 <TableHead className="border-r border-neutral-800 text-right">Since</TableHead>
-                {MOVE_WINDOWS.map((w) => (
+                {shownWindows.map((w) => (
                   <TableHead key={w} className="whitespace-nowrap text-right">
                     {w.replace('t+', '+')}
                   </TableHead>
@@ -944,7 +1010,7 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
                     >
                       {fmtPct(num(r.move_since_rating_pct))}
                     </TableCell>
-                    {MOVE_WINDOWS.map((w) => {
+                    {shownWindows.map((w) => {
                       const cell = r.moves?.[w];
                       const pct = num(cell?.pct);
                       const cellPrice = num(cell?.price);
