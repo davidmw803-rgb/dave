@@ -90,13 +90,24 @@ function closeOnOrBefore(
   return best ? { price: best.price, barAt: best.barAt } : null;
 }
 
-/** Closing price of the last bar at or before `at`. */
-function priceAt(bars: OhlcBarRaw[], at: number): { price: number; barAt: string } | null {
+/**
+ * Closing price of the last bar at or before `at`. With `after` set, bars at or
+ * before that time are ignored — so a window that saw no trading returns null
+ * rather than repeating the anchor bar and reading as a flat 0.0% move. That
+ * matters for pre- and post-market ratings, where minutes can pass with no
+ * print at all.
+ */
+function priceAt(
+  bars: OhlcBarRaw[],
+  at: number,
+  after?: number
+): { price: number; barAt: string } | null {
   let best: OhlcBarRaw | null = null;
   let bestTime = -Infinity;
   for (const bar of bars) {
     const t = barTime(bar);
     if (!Number.isFinite(t) || t > at) continue;
+    if (after !== undefined && t <= after) continue;
     if (t > bestTime) {
       bestTime = t;
       best = bar;
@@ -205,6 +216,7 @@ async function enrichEventWindows(
 
   const t0 = priceAt(minuteBars.value, ratedMs) ?? priceAt(dailyBars.value, ratedMs);
   if (!t0) return; // No bar at or before the rating — nothing to anchor to.
+  const t0Ms = new Date(t0.barAt).getTime();
 
   const rows: {
     event_key: string;
@@ -237,14 +249,16 @@ async function enrichEventWindows(
   for (const w of WINDOWS) {
     const at = ratedMs + w.minutes * 60_000;
     if (at > now) continue; // Not yet in the past — leave it for a later run.
-    push(w.label, priceAt(minuteBars.value, at));
+    push(w.label, priceAt(minuteBars.value, at, t0Ms));
   }
 
-  // Session close: the last minute bar of the rating's own day.
-  const eod = priceAt(minuteBars.value, ratedMs + 24 * 3600_000 - 1);
-  push('eod', eod);
-
+  // EOD is the official close of the rating's own session, taken from the daily
+  // bar — not the last post-market print, which is what the minute feed ends on.
   const ratedDate = ratedAt.toISOString().slice(0, 10);
+  if (ratedMs + 24 * 3600_000 <= now) {
+    push('eod', closeOnOrBefore(dailyBars.value, ratedDate));
+  }
+
   for (const w of DAY_WINDOWS) {
     const at = ratedMs + w.days * 24 * 3600_000;
     if (at > now) continue;

@@ -31,8 +31,20 @@ interface Props {
 
 type Progress = { label: string; done: number; total: number } | null;
 
-function fmtCap(n: number | null): string {
-  if (n === null || !Number.isFinite(n)) return '—';
+/**
+ * Numeric columns can arrive as numbers or as strings depending on the
+ * serializer, and a missing column arrives as undefined. Everything numeric
+ * goes through here before it is formatted or compared.
+ */
+function num(v: unknown): number | null {
+  if (v === null || v === undefined || v === '') return null;
+  const n = typeof v === 'number' ? v : Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function fmtCap(v: unknown): string {
+  const n = num(v);
+  if (n === null) return '—';
   if (n >= 1e12) return `$${(n / 1e12).toFixed(2)}T`;
   if (n >= 1e9) return `$${(n / 1e9).toFixed(1)}B`;
   if (n >= 1e6) return `$${(n / 1e6).toFixed(0)}M`;
@@ -94,9 +106,11 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
       if (firm && r.firm !== firm) return false;
       if (sector && r.sector !== sector) return false;
       if (a && !`${r.analyst_name ?? ''}`.toLowerCase().includes(a)) return false;
-      if (minC !== null && (r.marketcap === null || r.marketcap < minC)) return false;
-      if (maxC !== null && (r.marketcap === null || r.marketcap > maxC)) return false;
-      if (minU !== null && (r.upside_pct === null || r.upside_pct < minU)) return false;
+      const cap = num(r.marketcap);
+      const up = num(r.upside_pct);
+      if (minC !== null && (cap === null || cap < minC)) return false;
+      if (maxC !== null && (cap === null || cap > maxC)) return false;
+      if (minU !== null && (up === null || up < minU)) return false;
       return true;
     });
   }, [rows, firm, sector, analyst, minCap, maxCap, minUpside]);
@@ -140,6 +154,7 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
       setMessage(
         `Pulled ${body.rowsFetched} rows in ${body.apiCalls} API call${body.apiCalls === 1 ? '' : 's'} · ${body.rowsNew} new · ${body.tickers?.length ?? 0} tickers`
       );
+      await refreshAnalystsQuietly();
       await refresh();
       setSelected(new Set());
     } catch {
@@ -203,6 +218,8 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
         if ((body.remaining ?? 0) <= 0) break;
       }
 
+      // Win rates key off the +1d moves that just landed.
+      if (kind === 'prices') await refreshAnalystsQuietly();
       await refresh();
       setMessage(
         `${fetched} fetched · ${cached} already cached · ${failed} failed${firstError ? ` — first error: ${firstError}` : ''}`
@@ -255,6 +272,19 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
    * table; with one key it refreshes just that analyst — and because the stats
    * are keyed by analyst, the result lands on every rating they made.
    */
+  /** Recompute stats without touching the status line — used after a pull. */
+  const refreshAnalystsQuietly = async () => {
+    try {
+      await fetch('/api/research/analysts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ analystKeys: [] }),
+      });
+    } catch {
+      // Stats are a convenience; a failure here shouldn't derail the pull.
+    }
+  };
+
   const refreshAnalysts = async (analystKeys?: string[]) => {
     setBusy(analystKeys?.length === 1 ? `analyst:${analystKeys[0]}` : 'analysts');
     setError(null);
@@ -525,7 +555,7 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead className="w-8">
+                <TableHead className="sticky left-0 z-20 w-8 bg-neutral-950">
                   <input
                     type="checkbox"
                     aria-label="Select all"
@@ -534,8 +564,8 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
                     className="h-3.5 w-3.5 accent-emerald-500"
                   />
                 </TableHead>
+                <TableHead className="sticky left-8 z-20 bg-neutral-950">Ticker</TableHead>
                 <TableHead>Date</TableHead>
-                <TableHead>Ticker</TableHead>
                 <TableHead>Name</TableHead>
                 <TableHead>Analyst</TableHead>
                 <TableHead>Firm</TableHead>
@@ -571,7 +601,7 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
               ) : (
                 filtered.slice(0, 300).map((r) => (
                   <TableRow key={r.event_key} className={cn(selected.has(r.event_key) && 'bg-neutral-900')}>
-                    <TableCell>
+                    <TableCell className="sticky left-0 z-10 bg-neutral-950">
                       <input
                         type="checkbox"
                         checked={selected.has(r.event_key)}
@@ -579,11 +609,11 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
                         className="h-3.5 w-3.5 accent-emerald-500"
                       />
                     </TableCell>
+                    <TableCell className="sticky left-8 z-10 bg-neutral-950 font-mono text-xs font-semibold text-emerald-400">
+                      {r.ticker}
+                    </TableCell>
                     <TableCell className="whitespace-nowrap font-mono text-xs text-neutral-400">
                       {new Date(r.rated_at).toLocaleString()}
-                    </TableCell>
-                    <TableCell className="font-mono text-xs font-semibold text-emerald-400">
-                      {r.ticker}
                     </TableCell>
                     <TableCell className="max-w-[12rem] truncate text-xs text-neutral-300">
                       {r.full_name ?? '—'}
@@ -603,10 +633,10 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
                       </Badge>
                     </TableCell>
                     <TableCell className="text-right font-mono tabular-nums text-neutral-300">
-                      {fmtPrice(r.target)}
+                      {fmtPrice(num(r.target))}
                     </TableCell>
                     <TableCell className="text-right font-mono tabular-nums text-neutral-300">
-                      {fmtPrice(r.price_at_rating)}
+                      {fmtPrice(num(r.price_at_rating))}
                     </TableCell>
                     <TableCell
                       className="text-right font-mono tabular-nums text-neutral-100"
@@ -616,26 +646,27 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
                           : undefined
                       }
                     >
-                      {fmtPrice(r.current_price)}
+                      {fmtPrice(num(r.current_price))}
                     </TableCell>
                     <TableCell
-                      className={`text-right font-mono tabular-nums ${signColor(r.upside_pct)}`}
+                      className={`text-right font-mono tabular-nums ${signColor(num(r.upside_pct))}`}
                     >
-                      {fmtPct(r.upside_pct)}
+                      {fmtPct(num(r.upside_pct))}
                     </TableCell>
                     <TableCell
-                      className={`border-r border-neutral-800 text-right font-mono tabular-nums ${signColor(r.move_since_rating_pct)}`}
+                      className={`border-r border-neutral-800 text-right font-mono tabular-nums ${signColor(num(r.move_since_rating_pct))}`}
                     >
-                      {fmtPct(r.move_since_rating_pct)}
+                      {fmtPct(num(r.move_since_rating_pct))}
                     </TableCell>
                     {MOVE_WINDOWS.map((w) => {
                       const cell = r.moves?.[w];
-                      const pct = cell?.pct ?? null;
+                      const pct = num(cell?.pct);
+                      const cellPrice = num(cell?.price);
                       return (
                         <TableCell
                           key={w}
                           className={`text-right font-mono tabular-nums ${signColor(pct)}`}
-                          title={cell?.price ? `${fmtPrice(cell.price)} at ${w}` : undefined}
+                          title={cellPrice !== null ? `${fmtPrice(cellPrice)} at ${w}` : undefined}
                         >
                           {fmtPct(pct)}
                         </TableCell>
@@ -652,14 +683,14 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
                           : undefined
                       }
                     >
-                      {r.analyst_win_rate_1d === null
+                      {num(r.analyst_win_rate_1d) === null
                         ? '—'
-                        : `${r.analyst_win_rate_1d.toFixed(0)}%`}
+                        : `${num(r.analyst_win_rate_1d)!.toFixed(0)}%`}
                     </TableCell>
                     <TableCell
-                      className={`border-r border-neutral-800 text-right font-mono tabular-nums ${signColor(r.analyst_avg_move_1d)}`}
+                      className={`border-r border-neutral-800 text-right font-mono tabular-nums ${signColor(num(r.analyst_avg_move_1d))}`}
                     >
-                      {fmtPct(r.analyst_avg_move_1d)}
+                      {fmtPct(num(r.analyst_avg_move_1d))}
                     </TableCell>
                     <TableCell className="whitespace-nowrap text-xs text-neutral-400">
                       {r.sector ?? '—'}
@@ -671,7 +702,7 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
                       {r.tr_consensus ?? '—'}
                     </TableCell>
                     <TableCell className="text-right font-mono tabular-nums text-neutral-300">
-                      {fmtPrice(r.tr_price_target)}
+                      {fmtPrice(num(r.tr_price_target))}
                     </TableCell>
                     <TableCell className="whitespace-nowrap text-right">
                       <div className="flex items-center justify-end gap-1">
