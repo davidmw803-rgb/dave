@@ -58,8 +58,10 @@ function num(v: unknown): number | null {
 
 export async function enrichTipranks(
   tickers: string[],
-  batchSize = 20
+  batchSize = 10,
+  budgetMs = 20_000
 ): Promise<EnrichResult> {
+  const startedAt = Date.now();
   const apiKey = await getSetting('tipranks_api_key');
   if (!apiKey) {
     throw new Error('No TipRanks API key configured. Add one on /settings.');
@@ -87,7 +89,9 @@ export async function enrichTipranks(
   let failed = 0;
   const errors: { ticker: string; error: string }[] = [];
 
+  let processed = 0;
   for (const ticker of batch) {
+    if (Date.now() - startedAt > budgetMs) break;
     try {
       const res = await getOrFetch<TipranksPayload>(
         callKey('tipranks', 'research', ticker),
@@ -118,6 +122,7 @@ export async function enrichTipranks(
         { onConflict: 'ticker' }
       );
       if (error) throw new Error(error.message);
+      processed++;
     } catch (e) {
       failed++;
       errors.push({ ticker, error: e instanceof Error ? e.message : 'failed' });
@@ -128,7 +133,7 @@ export async function enrichTipranks(
     fetched,
     cached,
     failed,
-    remaining: Math.max(0, todo.length - batch.length),
+    remaining: Math.max(0, todo.length - processed),
     errors: errors.slice(0, 10),
   };
 }

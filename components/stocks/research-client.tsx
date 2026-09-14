@@ -61,7 +61,26 @@ async function postJson(
         body: JSON.stringify(body),
         signal: controller.signal,
       });
-      const parsed = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+      const parsed = (await res.json().catch(() => null)) as Record<string, unknown> | null;
+
+      // A gateway timeout answers with an HTML page, not JSON. That is worth
+      // another go; a 4xx is the server saying no, and is not.
+      if (!parsed || (res.status >= 500 && attempt < attempts - 1)) {
+        if (attempt < attempts - 1) {
+          await new Promise((r) => setTimeout(r, 1000 * (attempt * 2 + 1)));
+          continue;
+        }
+        return {
+          ok: false,
+          status: res.status,
+          body: {
+            error:
+              parsed?.error ??
+              `The server returned ${res.status} without a usable response. Progress is saved — click again to carry on.`,
+          },
+        };
+      }
+
       return { ok: res.ok, status: res.status, body: parsed };
     } catch (e) {
       lastError = e;
@@ -314,8 +333,9 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
 
     try {
       let stalledPasses = 0;
+      let consecutiveFailures = 0;
 
-      for (let guard = 0; guard < 200; guard++) {
+      for (let guard = 0; guard < 400; guard++) {
         setProgress({
           label: kind === 'prices' ? 'Pulling price history' : 'Pulling TipRanks',
           done,
@@ -326,8 +346,8 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
         const res = await postJson(
           '/api/research/enrich',
           kind === 'prices'
-            ? { kind, eventKeys, batchSize: 20 }
-            : { kind, tickers: tickerList, batchSize: 20 }
+            ? { kind, eventKeys, batchSize: 10 }
+            : { kind, tickers: tickerList, batchSize: 10 }
         );
         const body = res.body as {
           fetched?: number;
@@ -339,9 +359,18 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
         };
 
         if (!res.ok) {
-          setError(body.error ?? 'Enrichment failed.');
-          break;
+          consecutiveFailures += 1;
+          if (consecutiveFailures >= 3) {
+            setError(
+              `${body.error ?? 'Enrichment failed.'} Stopped at ${done} of ${total}; progress is saved, so clicking again resumes.`
+            );
+            break;
+          }
+          // Give it a moment and try the same slice again.
+          await new Promise((r) => setTimeout(r, 2000));
+          continue;
         }
+        consecutiveFailures = 0;
 
         fetched += body.fetched ?? 0;
         cached += body.cached ?? 0;

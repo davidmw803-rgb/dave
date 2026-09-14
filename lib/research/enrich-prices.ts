@@ -297,11 +297,24 @@ async function enrichEventWindows(
  * every request short enough for a serverless function and gives the UI
  * something to show progress with.
  */
+/**
+ * Enrich a bounded slice of work.
+ *
+ * Bounded by TIME as well as count: each rating needs two OHLC calls plus a
+ * write, and when the database is busy a batch of twenty can outlast the
+ * serverless function's own ceiling — the request dies mid-batch, the client
+ * sees a gateway error with no JSON in it, and the progress bar reports
+ * nothing even though work was done. Returning early with an accurate
+ * `remaining` keeps every pass short and every number honest.
+ */
 export async function enrichPrices(
   eventKeys: string[],
-  batchSize = 20,
-  force = false
+  batchSize = 10,
+  force = false,
+  budgetMs = 20_000
 ): Promise<EnrichResult> {
+  const startedAt = Date.now();
+  const outOfTime = () => Date.now() - startedAt > budgetMs;
   const supabase = createAdminClient();
   const client = await UnusualWhalesClient.create();
 
@@ -347,32 +360,34 @@ export async function enrichPrices(
   const counters = { fetched: 0, cached: 0 };
   const errors: { ticker: string; error: string }[] = [];
   let failed = 0;
-
-  const tickers = Array.from(new Set(batch.map((e) => e.ticker as string)));
-  for (const ticker of tickers) {
-    try {
-      await enrichTickerInfo(client, ticker, counters, force);
-    } catch (e) {
-      failed++;
-      errors.push({ ticker, error: e instanceof Error ? e.message : 'info failed' });
-    }
-  }
+  let processed = 0;
 
   for (const e of batch) {
+    if (outOfTime()) break;
+
+    // Company info and the quote come first: they drive market cap, the
+    // current price and the upside for every rating on this ticker.
     try {
-      await enrichEventWindows(
-        client,
-        {
-          event_key: e.event_key as string,
-          ticker: e.ticker as string,
-          rated_at: e.rated_at as string,
-        },
-        counters
-      );
+      await enrichTickerInfo(client, e.ticker, counters, force);
     } catch (err) {
       failed++;
       errors.push({
-        ticker: e.ticker as string,
+        ticker: e.ticker,
+        error: err instanceof Error ? err.message : 'info failed',
+      });
+    }
+
+    try {
+      await enrichEventWindows(
+        client,
+        { event_key: e.event_key, ticker: e.ticker, rated_at: e.rated_at },
+        counters
+      );
+      processed++;
+    } catch (err) {
+      failed++;
+      errors.push({
+        ticker: e.ticker,
         error: err instanceof Error ? err.message : 'prices failed',
       });
     }
@@ -382,7 +397,9 @@ export async function enrichPrices(
     fetched: counters.fetched,
     cached: counters.cached,
     failed,
-    remaining: Math.max(0, todo.length - batch.length),
+    // Count what actually finished, not what was selected — a pass cut short
+    // by the budget must not report the whole batch as done.
+    remaining: Math.max(0, todo.length - processed),
     errors: errors.slice(0, 10),
   };
 }
