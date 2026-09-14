@@ -10,6 +10,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Input } from '@/components/ui/input';
+import { DatePicker } from '@/components/ui/date-picker';
 import { Select } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -22,6 +23,13 @@ import {
   type ResearchRow,
 } from '@/lib/research/types';
 import { fmtPct, fmtPrice, signColor } from '@/lib/stocks/format';
+import {
+  TIME_PRESETS,
+  WEEKDAYS,
+  hhmmToMinutes,
+  inTimeRange,
+  marketMoment,
+} from '@/lib/research/market-time';
 
 interface Props {
   initialRows: ResearchRow[];
@@ -86,6 +94,9 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
   const [minCap, setMinCap] = useState('');
   const [maxCap, setMaxCap] = useState('');
   const [minUpside, setMinUpside] = useState('');
+  const [weekdays, setWeekdays] = useState<Set<number>>(new Set());
+  const [timeFrom, setTimeFrom] = useState('');
+  const [timeTo, setTimeTo] = useState('');
 
   const firms = useMemo(
     () => Array.from(new Set(rows.map((r) => r.firm).filter((f): f is string => !!f))).sort(),
@@ -101,8 +112,18 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
     const minC = minCap === '' ? null : Number(minCap);
     const maxC = maxCap === '' ? null : Number(maxCap);
     const minU = minUpside === '' ? null : Number(minUpside);
+    const fromMin = timeFrom ? hhmmToMinutes(timeFrom) : null;
+    const toMin = timeTo ? hhmmToMinutes(timeTo) : null;
+    const needsMoment = weekdays.size > 0 || fromMin !== null || toMin !== null;
 
     return rows.filter((r) => {
+      if (needsMoment) {
+        // Weekday and time-of-day are asked in market time, not UTC.
+        const moment = marketMoment(r.rated_at);
+        if (!moment) return false;
+        if (weekdays.size > 0 && !weekdays.has(moment.weekday)) return false;
+        if (!inTimeRange(moment.minutes, fromMin, toMin)) return false;
+      }
       if (firm && r.firm !== firm) return false;
       if (sector && r.sector !== sector) return false;
       if (a && !`${r.analyst_name ?? ''}`.toLowerCase().includes(a)) return false;
@@ -113,7 +134,7 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
       if (minU !== null && (up === null || up < minU)) return false;
       return true;
     });
-  }, [rows, firm, sector, analyst, minCap, maxCap, minUpside]);
+  }, [rows, firm, sector, analyst, minCap, maxCap, minUpside, weekdays, timeFrom, timeTo]);
 
   /** Selected rows, or everything currently filtered when nothing is ticked. */
   const targetRows = useMemo(
@@ -449,19 +470,21 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
             </div>
             <div className="flex flex-col gap-1">
               <label className="text-[10px] uppercase text-neutral-500">From</label>
-              <Input
-                type="date"
+              <DatePicker
                 value={newerThan}
-                onChange={(e) => setNewerThan(e.target.value)}
+                onChange={setNewerThan}
+                max={olderThan || undefined}
+                placeholder="Any date"
                 className="w-40"
               />
             </div>
             <div className="flex flex-col gap-1">
               <label className="text-[10px] uppercase text-neutral-500">To</label>
-              <Input
-                type="date"
+              <DatePicker
                 value={olderThan}
-                onChange={(e) => setOlderThan(e.target.value)}
+                onChange={setOlderThan}
+                min={newerThan || undefined}
+                placeholder="Any date"
                 className="w-40"
               />
             </div>
@@ -546,6 +569,116 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
             <p className="text-[10px] text-neutral-600">
               Market cap and upside need price history pulled first.
             </p>
+          </div>
+
+          <div className="flex flex-wrap items-end gap-4 border-t border-neutral-800 pt-3">
+            <div className="flex flex-col gap-1">
+              <label className="text-[10px] uppercase text-neutral-500">
+                Day of week{weekdays.size > 0 ? ` · ${weekdays.size} selected` : ' · all'}
+              </label>
+              <div className="flex items-center gap-1">
+                {WEEKDAYS.map((d) => {
+                  const on = weekdays.has(d.value);
+                  return (
+                    <button
+                      key={d.value}
+                      type="button"
+                      onClick={() =>
+                        setWeekdays((prev) => {
+                          const next = new Set(prev);
+                          next.has(d.value) ? next.delete(d.value) : next.add(d.value);
+                          return next;
+                        })
+                      }
+                      className={cn(
+                        'h-9 w-11 rounded-md border text-xs font-medium transition-colors',
+                        on
+                          ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-400'
+                          : 'border-neutral-800 bg-neutral-950 text-neutral-400 hover:border-neutral-700 hover:text-neutral-200'
+                      )}
+                    >
+                      {d.label}
+                    </button>
+                  );
+                })}
+                {weekdays.size > 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => setWeekdays(new Set())}
+                    className="h-9 px-2 text-[11px] text-neutral-500 hover:text-neutral-200"
+                  >
+                    clear
+                  </button>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-1">
+              <label className="text-[10px] uppercase text-neutral-500">
+                Time of day (ET)
+              </label>
+              <div className="flex items-center gap-1">
+                <Input
+                  type="time"
+                  value={timeFrom}
+                  onChange={(e) => setTimeFrom(e.target.value)}
+                  className="w-28"
+                />
+                <span className="text-neutral-600">–</span>
+                <Input
+                  type="time"
+                  value={timeTo}
+                  onChange={(e) => setTimeTo(e.target.value)}
+                  className="w-28"
+                />
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-1">
+              <label className="text-[10px] uppercase text-neutral-500">Session</label>
+              <div className="flex items-center gap-1">
+                {TIME_PRESETS.map((preset) => {
+                  const active = timeFrom === preset.from && timeTo === preset.to;
+                  return (
+                    <button
+                      key={preset.label}
+                      type="button"
+                      onClick={() => {
+                        setTimeFrom(preset.from);
+                        setTimeTo(preset.to);
+                      }}
+                      className={cn(
+                        'h-9 rounded-md border px-2.5 text-xs font-medium transition-colors',
+                        active
+                          ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-400'
+                          : 'border-neutral-800 bg-neutral-950 text-neutral-400 hover:border-neutral-700 hover:text-neutral-200'
+                      )}
+                    >
+                      {preset.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <Button
+              variant="outline"
+              size="sm"
+              className="self-end"
+              onClick={() => {
+                setFirm('');
+                setAnalyst('');
+                setSector('');
+                setMinCap('');
+                setMaxCap('');
+                setMinUpside('');
+                setWeekdays(new Set());
+                setTimeFrom('');
+                setTimeTo('');
+              }}
+            >
+              Reset filters
+            </Button>
           </div>
         </CardContent>
       </Card>
