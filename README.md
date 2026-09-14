@@ -169,6 +169,21 @@ upsert are all in place, but the request itself is a stub in
 `lib/research/tipranks.ts` — TipRanks has no single public API, so it needs the
 shape from whichever product the key belongs to.
 
+### When the research page times out
+
+The statement timeouts on this page have usually not been the research queries.
+This database also holds `poly_price_changes` — about 2.5 TB and 7.2 billion
+rows, 98% of the database — and its autovacuums run for hours while the tick
+ingest keeps writing. That saturates disk IO, and every other query, including
+ones that normally take 30ms, can blow past the 8s statement timeout.
+
+Check before optimising anything: `pg_stat_activity` for a long-running
+`autovacuum: VACUUM public.poly_price_changes`, and `pg_stat_statements` for
+what actually has the highest mean time. `service_role` is set to a 30s
+statement timeout (`alter role service_role reset statement_timeout` to undo)
+and the page retries once, which rides out a spike but is not a fix for the
+underlying capacity problem.
+
 `uw_research_rows` aggregates the window table once and hash-joins it. Do not
 rebuild `moves` with a correlated subquery: that runs one aggregate per row, and
 at ~10 windows per rating a 500-row page took 5.7s of an 8s statement timeout —
