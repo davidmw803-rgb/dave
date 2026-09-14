@@ -140,6 +140,16 @@ The table shows the price at the rating and the current price side by side, so
 latest quote. Each row also carries its own buttons to pull price history,
 TipRanks, or refresh that analyst.
 
+**Export CSV** downloads whatever the filters currently show — every matching
+row, not just the 300 rendered — or only the ticked rows when there is a
+selection. The count on the button is what will be written.
+
+The file is built for analysis rather than for reading: raw numbers with no `%`
+or `$`, empty cells rather than `—`, and the timestamp carried four ways (UTC
+instant, plus ET date, time, weekday and session), because the questions worth
+asking here are about market time and re-deriving it downstream is where
+mistakes creep in. The filename records the filters that produced it.
+
 **Analyst stats** live in `research_analysts`, keyed by `lower(name)|lower(firm)`
 — a generated column on the ratings table, so one refresh lands on every rating
 that analyst made. The stats (rating count, average +1d and +5d move, win rate,
