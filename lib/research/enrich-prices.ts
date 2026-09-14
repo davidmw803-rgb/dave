@@ -16,8 +16,10 @@ import type { EnrichResult } from './types';
 const WINDOWS: { label: string; minutes: number }[] = [
   { label: 't+1m', minutes: 1 },
   { label: 't+5m', minutes: 5 },
+  { label: 't+15m', minutes: 15 },
   { label: 't+30m', minutes: 30 },
   { label: 't+1h', minutes: 60 },
+  { label: 't+4h', minutes: 240 },
 ];
 
 const DAY_WINDOWS: { label: string; days: number }[] = [
@@ -26,6 +28,20 @@ const DAY_WINDOWS: { label: string; days: number }[] = [
   { label: 't+30d', days: 30 },
 ];
 
+/**
+ * Which windows should exist for a rating by now. Used to decide whether an
+ * event still needs work: a rating priced an hour after publication is missing
+ * its +1d, and should be picked up again once that day has passed.
+ */
+export function expectedWindows(ratedAt: string, now = Date.now()): string[] {
+  const t = new Date(ratedAt).getTime();
+  const labels = ['t0'];
+  for (const w of WINDOWS) if (t + w.minutes * 60_000 <= now) labels.push(w.label);
+  if (t + 24 * 3600_000 <= now) labels.push('eod');
+  for (const w of DAY_WINDOWS) if (t + w.days * 24 * 3600_000 <= now) labels.push(w.label);
+  return labels;
+}
+
 function num(v: unknown): number | null {
   if (v === null || v === undefined || v === '') return null;
   const n = Number(v);
@@ -33,8 +49,45 @@ function num(v: unknown): number | null {
 }
 
 function barTime(bar: OhlcBarRaw): number {
+  // Intraday bars carry start_time/end_time; daily and weekly bars carry a
+  // plain `date` instead. Treat a dated bar as its US close (20:00 UTC).
   const t = bar.end_time ?? bar.start_time;
-  return t ? new Date(t).getTime() : NaN;
+  if (t) return new Date(t).getTime();
+  if (bar.date) return new Date(`${bar.date}T20:00:00Z`).getTime();
+  return NaN;
+}
+
+/** Trading date of a bar, for day-window matching. */
+function barDate(bar: OhlcBarRaw): string | null {
+  if (bar.date) return bar.date;
+  const t = bar.end_time ?? bar.start_time;
+  return t ? new Date(t).toISOString().slice(0, 10) : null;
+}
+
+function addDays(iso: string, days: number): string {
+  const d = new Date(`${iso}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * Close of the last session on or before `targetDate` — so a window landing on
+ * a weekend or holiday resolves to the prior trading day rather than nothing.
+ */
+function closeOnOrBefore(
+  bars: OhlcBarRaw[],
+  targetDate: string
+): { price: number; barAt: string } | null {
+  let best: { price: number; barAt: string; date: string } | null = null;
+  for (const bar of bars) {
+    const date = barDate(bar);
+    const price = num(bar.close);
+    if (!date || price === null || date > targetDate) continue;
+    if (!best || date > best.date) {
+      best = { price, barAt: new Date(`${date}T20:00:00Z`).toISOString(), date };
+    }
+  }
+  return best ? { price: best.price, barAt: best.barAt } : null;
 }
 
 /** Closing price of the last bar at or before `at`. */
@@ -57,18 +110,31 @@ function priceAt(bars: OhlcBarRaw[], at: number): { price: number; barAt: string
 async function enrichTickerInfo(
   client: UnusualWhalesClient,
   ticker: string,
-  counters: { fetched: number; cached: number }
+  counters: { fetched: number; cached: number },
+  force = false
 ): Promise<void> {
   const info = await getOrFetch(
     callKey('uw', 'info', ticker),
-    { provider: 'uw', endpoint: '/api/stock/{ticker}/info', args: { ticker }, ttlMs: TTL.info },
+    {
+      provider: 'uw',
+      endpoint: '/api/stock/{ticker}/info',
+      args: { ticker },
+      ttlMs: TTL.info,
+      force,
+    },
     () => client.stockInfo(ticker)
   );
   info.cached ? counters.cached++ : counters.fetched++;
 
   const quote = await getOrFetch(
     callKey('uw', 'quote', ticker),
-    { provider: 'uw', endpoint: '/api/stock/{ticker}/quote', args: { ticker }, ttlMs: TTL.quote },
+    {
+      provider: 'uw',
+      endpoint: '/api/stock/{ticker}/quote',
+      args: { ticker },
+      ttlMs: TTL.quote,
+      force,
+    },
     () => client.stockQuote(ticker)
   );
   quote.cached ? counters.cached++ : counters.fetched++;
@@ -178,10 +244,11 @@ async function enrichEventWindows(
   const eod = priceAt(minuteBars.value, ratedMs + 24 * 3600_000 - 1);
   push('eod', eod);
 
+  const ratedDate = ratedAt.toISOString().slice(0, 10);
   for (const w of DAY_WINDOWS) {
     const at = ratedMs + w.days * 24 * 3600_000;
     if (at > now) continue;
-    push(w.label, priceAt(dailyBars.value, at));
+    push(w.label, closeOnOrBefore(dailyBars.value, addDays(ratedDate, w.days)));
   }
 
   const supabase = createAdminClient();
@@ -198,7 +265,8 @@ async function enrichEventWindows(
  */
 export async function enrichPrices(
   eventKeys: string[],
-  batchSize = 20
+  batchSize = 20,
+  force = false
 ): Promise<EnrichResult> {
   const supabase = createAdminClient();
   const client = await UnusualWhalesClient.create();
@@ -209,15 +277,25 @@ export async function enrichPrices(
     .in('event_key', eventKeys.slice(0, 1000));
   if (error) throw new Error(error.message);
 
-  // Skip ratings that already have a t0 — they're done.
-  const { data: priced } = await supabase
+  // A rating is done only when every window that *should* exist by now does.
+  // Anything priced before its +1d had elapsed gets picked up again later.
+  const { data: stored } = await supabase
     .from('uw_event_price_windows')
-    .select('event_key')
-    .eq('window_label', 't0')
+    .select('event_key, window_label')
     .in('event_key', eventKeys.slice(0, 1000));
-  const done = new Set((priced ?? []).map((r) => r.event_key as string));
 
-  const todo = (events ?? []).filter((e) => !done.has(e.event_key as string));
+  const have = new Map<string, Set<string>>();
+  for (const row of stored ?? []) {
+    const key = row.event_key as string;
+    if (!have.has(key)) have.set(key, new Set());
+    have.get(key)!.add(row.window_label as string);
+  }
+
+  const todo = (events ?? []).filter((e) => {
+    if (force) return true;
+    const labels = have.get(e.event_key as string) ?? new Set<string>();
+    return expectedWindows(e.rated_at as string).some((w) => !labels.has(w));
+  });
   const batch = todo.slice(0, batchSize);
 
   const counters = { fetched: 0, cached: 0 };
@@ -227,7 +305,7 @@ export async function enrichPrices(
   const tickers = Array.from(new Set(batch.map((e) => e.ticker as string)));
   for (const ticker of tickers) {
     try {
-      await enrichTickerInfo(client, ticker, counters);
+      await enrichTickerInfo(client, ticker, counters, force);
     } catch (e) {
       failed++;
       errors.push({ ticker, error: e instanceof Error ? e.message : 'info failed' });

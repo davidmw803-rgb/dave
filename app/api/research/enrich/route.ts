@@ -12,7 +12,13 @@ export const maxDuration = 60;
  * progress instead of hanging.
  */
 export async function POST(req: NextRequest) {
-  let body: { kind?: unknown; eventKeys?: unknown; tickers?: unknown; batchSize?: unknown };
+  let body: {
+    kind?: unknown;
+    eventKeys?: unknown;
+    tickers?: unknown;
+    batchSize?: unknown;
+    force?: unknown;
+  };
   try {
     body = await req.json();
   } catch {
@@ -20,6 +26,7 @@ export async function POST(req: NextRequest) {
   }
 
   const batchSize = typeof body.batchSize === 'number' ? Math.min(body.batchSize, 50) : 20;
+  const force = body.force === true;
 
   try {
     if (body.kind === 'prices') {
@@ -29,7 +36,7 @@ export async function POST(req: NextRequest) {
       if (keys.length === 0) {
         return NextResponse.json({ error: 'No ratings selected.' }, { status: 400 });
       }
-      return NextResponse.json({ ok: true, ...(await enrichPrices(keys, batchSize)) });
+      return NextResponse.json({ ok: true, ...(await enrichPrices(keys, batchSize, force)) });
     }
 
     if (body.kind === 'tipranks') {

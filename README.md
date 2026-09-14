@@ -95,9 +95,29 @@ Enrichment runs in batches of 20 per request, the client looping while
 `remaining > 0`, so no single request outlives a serverless function. Each pass
 reports fetched / cached / failed.
 
-Price history is stored per rating as windows off t0 — +1m, +5m, +30m, +1h, EOD,
-+1d, +5d, +30d — from the OHLC endpoint, with the percentage move from t0.
-Windows still in the future are skipped and filled by a later run.
+Price history is stored per rating as windows off t0 — +1m, +5m, +15m, +30m,
++1h, +4h, EOD, +1d, +5d, +30d — from the OHLC endpoint, with the percentage
+move from t0. Windows still in the future are skipped; a rating counts as done
+only when every window that *should* exist by now does, so a later run fills
+them in as time passes.
+
+Intraday bars carry `start_time`/`end_time`, but daily and weekly bars carry a
+plain `date` instead — day windows match on trading date, so a window landing on
+a weekend or holiday resolves to the prior session's close rather than nothing.
+
+The table shows the price at the rating and the current price side by side, so
+`Since` is the move since publication and `Upside` is the target against the
+latest quote. Each row also carries its own buttons to pull price history,
+TipRanks, or refresh that analyst.
+
+**Analyst stats** live in `research_analysts`, keyed by `lower(name)|lower(firm)`
+— a generated column on the ratings table, so one refresh lands on every rating
+that analyst made. The stats (rating count, average +1d and +5d move, win rate,
+average upside) are computed from data already held, costing no API calls, and
+sharpen as more price history is pulled. A win is a move that went the way the
+call did: up for a buy, down for a sell; holds count in the sample but never as
+wins. TipRanks analyst columns sit alongside, filling in once that adapter is
+wired.
 
 TipRanks is the one unfinished piece: the cache key, TTL, batching, parsing and
 upsert are all in place, but the request itself is a stub in
