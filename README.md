@@ -105,6 +105,12 @@ Intraday bars carry `start_time`/`end_time`, but daily and weekly bars carry a
 plain `date` instead — day windows match on trading date, so a window landing on
 a weekend or holiday resolves to the prior session's close rather than nothing.
 
+A window only records a price when a bar exists *after* the rating's own bar. A
+pre- or post-market rating can go minutes with no print at all, and repeating
+the anchor bar there would read as a real 0.0% move; those windows show `—`
+instead. EOD comes from the daily bar for the rating's session — the official
+close, not the last post-market tick the minute feed ends on.
+
 The table shows the price at the rating and the current price side by side, so
 `Since` is the move since publication and `Upside` is the target against the
 latest quote. Each row also carries its own buttons to pull price history,
