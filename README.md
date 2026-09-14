@@ -108,7 +108,16 @@ they are a separate button.
 
 Enrichment runs in batches of 20 per request, the client looping while
 `remaining > 0`, so no single request outlives a serverless function. Each pass
-reports fetched / cached / failed.
+reports fetched / cached / failed, and three passes without progress stop the
+run rather than spinning. Requests carry a 90s timeout and retry twice, and
+progress is saved server-side after every batch — on a bad connection, clicking
+again resumes rather than starting over.
+
+Whether a rating still needs work is answered by `windows_pulled_at` on the
+rating itself: more windows should exist now than existed when it was last
+pulled. Do not go back to comparing stored window rows — at ~10 rows per rating
+that read crosses PostgREST's 1000-row response cap once ~100 ratings are
+priced, everything past the cap looks unpriced, and the loop never finishes.
 
 Price history is stored per rating as windows off t0 — +1m, +5m, +15m, +30m,
 +1h, +4h, EOD, +1d, +5d, +30d — from the OHLC endpoint, with the percentage
