@@ -73,6 +73,11 @@ Pull analyst ratings from UW's screener, then enrich the rows you care about.
 | Filtered locally | firm, analyst, sector, day of week, time of day | free, no calls |
 | Needs enrichment first | market cap, price, upside % | one call per ticker |
 
+Every control filters the loaded rows, including the ones sent to UW. Narrowing
+the ticker, action, rating or date range re-filters the table you already have
+rather than requiring another pull; hit **Pull ratings** only when you want more
+data from the API.
+
 Dates are picked from a calendar popover (`components/ui/date-picker.tsx`) that
 works in plain `YYYY-MM-DD` strings, so no timezone shifts the day you clicked.
 

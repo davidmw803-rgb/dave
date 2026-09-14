@@ -18,6 +18,24 @@ const WEEKDAY_INDEX: Record<string, number> = {
   Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6,
 };
 
+const dateFormatter = new Intl.DateTimeFormat('en-CA', {
+  timeZone: MARKET_TZ,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
+
+/**
+ * The calendar date of a timestamp in market time, as YYYY-MM-DD — so a
+ * From/To range compares against the day the rating happened in New York,
+ * matching the weekday and session filters rather than the UTC date.
+ */
+export function marketDate(iso: string): string | null {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return dateFormatter.format(d);
+}
+
 export interface MarketMoment {
   /** 0 = Sunday, matching Date.getDay(). */
   weekday: number;
