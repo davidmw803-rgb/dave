@@ -25,7 +25,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Malformed request.' }, { status: 400 });
   }
 
-  const batchSize = typeof body.batchSize === 'number' ? Math.min(body.batchSize, 50) : 20;
+  const batchSize = typeof body.batchSize === 'number' ? Math.min(body.batchSize, 50) : 10;
+  // Well inside maxDuration, so the handler returns a real answer rather than
+  // being killed mid-batch and answering with a gateway error page.
+  const budgetMs = 20_000;
   const force = body.force === true;
 
   try {
@@ -36,7 +39,10 @@ export async function POST(req: NextRequest) {
       if (keys.length === 0) {
         return NextResponse.json({ error: 'No ratings selected.' }, { status: 400 });
       }
-      return NextResponse.json({ ok: true, ...(await enrichPrices(keys, batchSize, force)) });
+      return NextResponse.json({
+        ok: true,
+        ...(await enrichPrices(keys, batchSize, force, budgetMs)),
+      });
     }
 
     if (body.kind === 'tipranks') {
@@ -46,7 +52,10 @@ export async function POST(req: NextRequest) {
       if (tickers.length === 0) {
         return NextResponse.json({ error: 'No tickers selected.' }, { status: 400 });
       }
-      return NextResponse.json({ ok: true, ...(await enrichTipranks(tickers, batchSize)) });
+      return NextResponse.json({
+        ok: true,
+        ...(await enrichTipranks(tickers, batchSize, budgetMs)),
+      });
     }
 
     return NextResponse.json({ error: 'Unknown enrichment kind.' }, { status: 400 });
