@@ -70,8 +70,18 @@ Pull analyst ratings from UW's screener, then enrich the rows you care about.
 | Tier | Fields | Cost |
 |---|---|---|
 | Sent to UW | ticker, action, recommendation, date range, max rows | narrows the fetch |
-| Filtered locally | firm, analyst, sector | free, no calls |
+| Filtered locally | firm, analyst, sector, day of week, time of day | free, no calls |
 | Needs enrichment first | market cap, price, upside % | one call per ticker |
+
+Dates are picked from a calendar popover (`components/ui/date-picker.tsx`) that
+works in plain `YYYY-MM-DD` strings, so no timezone shifts the day you clicked.
+
+Day of week and time of day are evaluated in **market time**, not UTC
+(`lib/research/market-time.ts`), so "Monday pre-market" means what a trader
+means by it — through DST changes, and across the boundary where a UTC Monday
+is still Sunday in New York. Session presets cover pre-market (04:00–09:30),
+regular hours (09:30–16:00) and after hours (16:00–20:00) ET; a custom range
+that wraps past midnight is handled too.
 
 `GET /api/screener/analysts` returns only `ticker, analyst_name, firm,
 recommendation, action, sector, target, timestamp` — price, upside, market cap
