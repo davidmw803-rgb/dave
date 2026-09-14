@@ -215,33 +215,41 @@ async function enrichEventWindows(
   dailyBars.cached ? counters.cached++ : counters.fetched++;
 
   const t0 = priceAt(minuteBars.value, ratedMs) ?? priceAt(dailyBars.value, ratedMs);
-  if (!t0) return; // No bar at or before the rating — nothing to anchor to.
-  const t0Ms = new Date(t0.barAt).getTime();
+  const t0Ms = t0 ? new Date(t0.barAt).getTime() : ratedMs;
 
-  const rows: {
+  interface WindowRow {
     event_key: string;
     window_label: string;
-    price: number;
-    bar_at: string;
+    price: number | null;
+    bar_at: string | null;
     pct_from_t0: number | null;
-  }[] = [
+  }
+
+  const rows: WindowRow[] = [
     {
       event_key: event.event_key,
       window_label: 't0',
-      price: t0.price,
-      bar_at: t0.barAt,
-      pct_from_t0: 0,
+      price: t0?.price ?? null,
+      bar_at: t0?.barAt ?? null,
+      pct_from_t0: t0 ? 0 : null,
     },
   ];
 
+  /**
+   * Every elapsed window gets a row, even when nothing traded — a row with a
+   * null price records "we looked and there was no print", which reads as `—`
+   * in the table exactly like a missing row would. Writing nothing instead
+   * leaves the window permanently outstanding, so the enrichment loop keeps
+   * picking the rating up and never finishes.
+   */
   const push = (label: string, hit: { price: number; barAt: string } | null) => {
-    if (!hit) return;
     rows.push({
       event_key: event.event_key,
       window_label: label,
-      price: hit.price,
-      bar_at: hit.barAt,
-      pct_from_t0: t0.price > 0 ? ((hit.price - t0.price) / t0.price) * 100 : null,
+      price: hit?.price ?? null,
+      bar_at: hit?.barAt ?? null,
+      pct_from_t0:
+        hit && t0 && t0.price > 0 ? ((hit.price - t0.price) / t0.price) * 100 : null,
     });
   };
 
@@ -249,20 +257,20 @@ async function enrichEventWindows(
   for (const w of WINDOWS) {
     const at = ratedMs + w.minutes * 60_000;
     if (at > now) continue; // Not yet in the past — leave it for a later run.
-    push(w.label, priceAt(minuteBars.value, at, t0Ms));
+    push(w.label, t0 ? priceAt(minuteBars.value, at, t0Ms) : null);
   }
 
   // EOD is the official close of the rating's own session, taken from the daily
   // bar — not the last post-market print, which is what the minute feed ends on.
   const ratedDate = ratedAt.toISOString().slice(0, 10);
   if (ratedMs + 24 * 3600_000 <= now) {
-    push('eod', closeOnOrBefore(dailyBars.value, ratedDate));
+    push('eod', t0 ? closeOnOrBefore(dailyBars.value, ratedDate) : null);
   }
 
   for (const w of DAY_WINDOWS) {
     const at = ratedMs + w.days * 24 * 3600_000;
     if (at > now) continue;
-    push(w.label, closeOnOrBefore(dailyBars.value, addDays(ratedDate, w.days)));
+    push(w.label, t0 ? closeOnOrBefore(dailyBars.value, addDays(ratedDate, w.days)) : null);
   }
 
   const supabase = createAdminClient();
