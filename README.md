@@ -120,8 +120,13 @@ that read crosses PostgREST's 1000-row response cap once ~100 ratings are
 priced, everything past the cap looks unpriced, and the loop never finishes.
 
 Price history is stored per rating as windows off t0 — +1m, +5m, +15m, +30m,
-+1h, +4h, EOD, +1d, +5d, +30d — from the OHLC endpoint, with the percentage
-move from t0. Windows still in the future are skipped; a rating counts as done
++1h, +4h, EOD, then every calendar day from +1d to +30d — from the OHLC
+endpoint, with the percentage move from t0. The full daily series costs no extra
+API calls: a ticker's daily bars arrive in one request covering three months, so
+all thirty windows are read from a response already being fetched.
+
+The table shows a readable subset of the daily block by default and toggles to
+all 37 windows; exports always contain every one. Windows still in the future are skipped; a rating counts as done
 only when every window that *should* exist by now does, so a later run fills
 them in as time passes.
 

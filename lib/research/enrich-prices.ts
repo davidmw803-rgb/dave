@@ -22,11 +22,15 @@ const WINDOWS: { label: string; minutes: number }[] = [
   { label: 't+4h', minutes: 240 },
 ];
 
-const DAY_WINDOWS: { label: string; days: number }[] = [
-  { label: 't+1d', days: 1 },
-  { label: 't+5d', days: 5 },
-  { label: 't+30d', days: 30 },
-];
+/**
+ * Every calendar day out to +30. The daily bars for a ticker arrive in a single
+ * OHLC call covering three months, so a full daily series costs no more API
+ * calls than the three windows this used to record.
+ */
+const DAY_WINDOWS: { label: string; days: number }[] = Array.from(
+  { length: 30 },
+  (_, i) => ({ label: `t+${i + 1}d`, days: i + 1 })
+);
 
 /**
  * Which windows should exist for a rating by now. Used to decide whether an
