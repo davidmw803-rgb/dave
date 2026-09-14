@@ -28,6 +28,7 @@ import {
   WEEKDAYS,
   hhmmToMinutes,
   inTimeRange,
+  marketDate,
   marketMoment,
 } from '@/lib/research/market-time';
 
@@ -116,7 +117,29 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
     const toMin = timeTo ? hhmmToMinutes(timeTo) : null;
     const needsMoment = weekdays.size > 0 || fromMin !== null || toMin !== null;
 
+    // Everything in the pull form doubles as a filter on the rows already
+    // loaded, so narrowing the form narrows the table without a refetch.
+    const tickerSet = new Set(
+      tickers
+        .split(/[\s,]+/)
+        .map((t) => t.trim().toUpperCase())
+        .filter(Boolean)
+    );
+    const needsDate = Boolean(newerThan || olderThan);
+
     return rows.filter((r) => {
+      if (tickerSet.size > 0 && !tickerSet.has(r.ticker.toUpperCase())) return false;
+      if (action && r.action !== action) return false;
+      if (recommendation && r.recommendation !== recommendation) return false;
+
+      if (needsDate) {
+        // Compared on the market-time date, like the weekday and session filters.
+        const day = marketDate(r.rated_at);
+        if (!day) return false;
+        if (newerThan && day < newerThan) return false;
+        if (olderThan && day > olderThan) return false;
+      }
+
       if (needsMoment) {
         // Weekday and time-of-day are asked in market time, not UTC.
         const moment = marketMoment(r.rated_at);
@@ -134,7 +157,23 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
       if (minU !== null && (up === null || up < minU)) return false;
       return true;
     });
-  }, [rows, firm, sector, analyst, minCap, maxCap, minUpside, weekdays, timeFrom, timeTo]);
+  }, [
+    rows,
+    tickers,
+    action,
+    recommendation,
+    newerThan,
+    olderThan,
+    firm,
+    sector,
+    analyst,
+    minCap,
+    maxCap,
+    minUpside,
+    weekdays,
+    timeFrom,
+    timeTo,
+  ]);
 
   /** Selected rows, or everything currently filtered when nothing is ticked. */
   const targetRows = useMemo(
@@ -427,8 +466,14 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
 
       <Card>
         <CardContent className="space-y-3 p-3">
-          <div className="text-[10px] uppercase tracking-wide text-neutral-600">
-            Sent to Unusual Whales
+          <div className="flex flex-wrap items-baseline gap-2">
+            <span className="text-[10px] uppercase tracking-wide text-neutral-600">
+              Sent to Unusual Whales
+            </span>
+            <span className="text-[10px] text-neutral-600">
+              — and applied to the table below, so narrowing these filters the rows you
+              already have
+            </span>
           </div>
           <div className="flex flex-wrap items-end gap-3">
             <div className="flex flex-1 flex-col gap-1">
@@ -499,8 +544,13 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
             </div>
           </div>
 
-          <div className="border-t border-neutral-800 pt-3 text-[10px] uppercase tracking-wide text-neutral-600">
-            Filtered here — no API calls
+          <div className="flex flex-wrap items-baseline gap-2 border-t border-neutral-800 pt-3">
+            <span className="text-[10px] uppercase tracking-wide text-neutral-600">
+              Table only — no API calls
+            </span>
+            <span className="text-[10px] text-neutral-600">
+              — Unusual Whales can&apos;t filter on these, so they apply to loaded rows
+            </span>
           </div>
           <div className="flex flex-wrap items-end gap-3">
             <div className="flex flex-col gap-1">
@@ -666,6 +716,11 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
               size="sm"
               className="self-end"
               onClick={() => {
+                setTickers('');
+                setAction('');
+                setRecommendation('');
+                setNewerThan('');
+                setOlderThan('');
                 setFirm('');
                 setAnalyst('');
                 setSector('');
@@ -677,7 +732,7 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
                 setTimeTo('');
               }}
             >
-              Reset filters
+              Clear all filters
             </Button>
           </div>
         </CardContent>
