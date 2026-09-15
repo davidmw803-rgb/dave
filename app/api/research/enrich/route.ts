@@ -25,10 +25,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Malformed request.' }, { status: 400 });
   }
 
-  const batchSize = typeof body.batchSize === 'number' ? Math.min(body.batchSize, 50) : 10;
+  const batchSize = typeof body.batchSize === 'number' ? Math.min(body.batchSize, 100) : 40;
   // Well inside maxDuration, so the handler returns a real answer rather than
   // being killed mid-batch and answering with a gateway error page.
-  const budgetMs = 20_000;
+  const budgetMs = 45_000;
   const force = body.force === true;
 
   try {

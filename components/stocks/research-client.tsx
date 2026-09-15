@@ -453,8 +453,8 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
         const res = await postJson(
           '/api/research/enrich',
           kind === 'prices'
-            ? { kind, eventKeys, batchSize: 10 }
-            : { kind, tickers: tickerList, batchSize: 10 }
+            ? { kind, eventKeys, batchSize: 40 }
+            : { kind, tickers: tickerList, batchSize: 40 }
         );
         const body = res.body as {
           fetched?: number;

@@ -105,13 +105,30 @@ export class UnusualWhalesClient {
       if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, String(v));
     }
 
-    const res = await fetch(url, {
+    let res = await fetch(url, {
       headers: {
         Accept: 'application/json',
         Authorization: `Bearer ${this.creds.apiKey}`,
       },
       cache: 'no-store',
     });
+
+    // Back off and retry a rate limit rather than failing the rating: honour
+    // Retry-After when it is sent, otherwise wait a beat.
+    for (let attempt = 0; attempt < 2 && res.status === 429; attempt++) {
+      const retryAfter = Number(res.headers.get('retry-after'));
+      const waitMs = Number.isFinite(retryAfter) && retryAfter > 0
+        ? Math.min(retryAfter * 1000, 5000)
+        : 1000 * (attempt + 1);
+      await new Promise((r) => setTimeout(r, waitMs));
+      res = await fetch(url, {
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${this.creds.apiKey}`,
+        },
+        cache: 'no-store',
+      });
+    }
 
     if (!res.ok) {
       const body = await res.text().catch(() => '');

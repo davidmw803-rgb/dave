@@ -342,9 +342,9 @@ async function enrichEventWindows(
  */
 export async function enrichPrices(
   eventKeys: string[],
-  batchSize = 10,
+  batchSize = 40,
   force = false,
-  budgetMs = 20_000
+  budgetMs = 45_000
 ): Promise<EnrichResult> {
   const startedAt = Date.now();
   const outOfTime = () => Date.now() - startedAt > budgetMs;
@@ -395,36 +395,55 @@ export async function enrichPrices(
   let failed = 0;
   let processed = 0;
 
-  for (const e of batch) {
-    if (outOfTime()) break;
-
-    // Company info and the quote come first: they drive market cap, the
-    // current price and the upside for every rating on this ticker.
-    try {
-      await enrichTickerInfo(client, e.ticker, counters, force);
-    } catch (err) {
-      failed++;
-      errors.push({
-        ticker: e.ticker,
-        error: err instanceof Error ? err.message : 'info failed',
+  // One info fetch per ticker per pass, shared by every rating on it, so a
+  // batch covering ten ratings of the same name doesn't fetch it ten times.
+  const infoOnce = new Map<string, Promise<void>>();
+  const ensureInfo = (ticker: string): Promise<void> => {
+    let pending = infoOnce.get(ticker);
+    if (!pending) {
+      pending = enrichTickerInfo(client, ticker, counters, force).catch((err) => {
+        failed++;
+        errors.push({
+          ticker,
+          error: err instanceof Error ? err.message : 'info failed',
+        });
       });
+      infoOnce.set(ticker, pending);
     }
+    return pending;
+  };
 
-    try {
-      await enrichEventWindows(
-        client,
-        { event_key: e.event_key, ticker: e.ticker, rated_at: e.rated_at },
-        counters
-      );
-      processed++;
-    } catch (err) {
-      failed++;
-      errors.push({
-        ticker: e.ticker,
-        error: err instanceof Error ? err.message : 'prices failed',
-      });
+  // A few ratings in flight at once. Each is mostly waiting on the API, so
+  // this is where the throughput comes from — but kept low enough to stay
+  // polite to the rate limiter, which is the real ceiling.
+  const CONCURRENCY = 4;
+  const queue = [...batch];
+
+  const worker = async (): Promise<void> => {
+    while (queue.length > 0 && !outOfTime()) {
+      const e = queue.shift();
+      if (!e) return;
+
+      await ensureInfo(e.ticker);
+
+      try {
+        await enrichEventWindows(
+          client,
+          { event_key: e.event_key, ticker: e.ticker, rated_at: e.rated_at },
+          counters
+        );
+        processed++;
+      } catch (err) {
+        failed++;
+        errors.push({
+          ticker: e.ticker,
+          error: err instanceof Error ? err.message : 'prices failed',
+        });
+      }
     }
-  }
+  };
+
+  await Promise.all(Array.from({ length: CONCURRENCY }, () => worker()));
 
   return {
     fetched: counters.fetched,
