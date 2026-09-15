@@ -143,6 +143,15 @@ ticker pinned so rows stay identifiable. Exports contain every one. Windows stil
 only when every window that *should* exist by now does, so a later run fills
 them in as time passes.
 
+Two things about UW's daily feed that are easy to get wrong. It returns a row
+per market session — pre, regular and post — so one date can appear two or three
+times with different closes; take the regular-session row, or "the close" may be
+a pre-market print. And because of that duplication, a row limit is not a date
+range: `limit: 90` yielded only ~40 calendar days, so any rating older than that
+had no bar at or before it and priced out completely blank. Anchor the request
+on the rating's own date (`end_date` = rating + 45 days) rather than counting
+rows back from today.
+
 Intraday bars carry `start_time`/`end_time`, but daily and weekly bars carry a
 plain `date` instead — day windows match on trading date, so a window landing on
 a weekend or holiday resolves to the prior session's close rather than nothing.
