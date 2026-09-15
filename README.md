@@ -78,6 +78,11 @@ the ticker, action, rating or date range re-filters the table you already have
 rather than requiring another pull; hit **Pull ratings** only when you want more
 data from the API.
 
+The client walks every page of matches (1000 per request) rather than taking the
+first response, so filtering and export always see the whole set. The table pages
+through it — 100/300/500/1000 per page — while **Export CSV** and both enrich
+buttons act on every filtered row across all pages, not just the visible page.
+
 The date range, tickers, action and rating are also sent to `/api/research/rows`
 when the table loads. The table can only filter rows it has, so loading "the
 newest N" would leave a pull of older ratings sitting in the database, invisible
