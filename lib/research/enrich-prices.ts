@@ -94,6 +94,20 @@ function addDays(iso: string, days: number): string {
 }
 
 /**
+ * The shared daily-bar request for a rating dated `iso`: one six-month series
+ * per ticker-month, anchored 45 days past the end of that month so it reaches
+ * the +30d window of a rating made on its last day. Capped at today, because
+ * asking for bars that do not exist yet just returns fewer of them.
+ */
+function dailyWindowFor(iso: string): { key: string; endDate: string } {
+  const month = iso.slice(0, 7);
+  const monthEnd = new Date(`${month}-01T00:00:00Z`);
+  monthEnd.setUTCMonth(monthEnd.getUTCMonth() + 1);
+  const end = Math.min(monthEnd.getTime() + 45 * 24 * 3600_000, Date.now());
+  return { key: month, endDate: new Date(end).toISOString().slice(0, 10) };
+}
+
+/**
  * Close of the last session on or before `targetDate` — so a window landing on
  * a weekend or holiday resolves to the prior trading day rather than nothing.
  */
@@ -211,29 +225,40 @@ async function enrichEventWindows(
   const day = ratedAt.toISOString().slice(0, 10);
 
   // Intraday bars for the rating's own session, then daily bars for the drift.
+  //
+  // The whole session, not the last 500 minutes of it. UW returns the NEWEST
+  // rows when a request is truncated, and an extended session runs about 960
+  // minutes — so `limit: 500` handed back a series starting mid-afternoon, and
+  // a rating published in the morning fell before its first bar. Every
+  // intraday window on it then priced out blank while the pull reported
+  // success. 2500 is the endpoint's documented maximum and covers any session.
   const minuteBars = await getOrFetch<OhlcBarRaw[]>(
     callKey('uw', 'ohlc', event.ticker, '1m', day),
     {
       provider: 'uw',
       endpoint: '/api/stock/{ticker}/ohlc/1m',
-      args: { ticker: event.ticker, date: day },
+      args: { ticker: event.ticker, date: day, limit: 2500 },
       // A past session's bars never change.
       ttlMs: TTL.settled,
     },
-    () => client.ohlc(event.ticker, '1m', { date: day, limit: 500 })
+    () => client.ohlc(event.ticker, '1m', { date: day, limit: 2500 })
   );
   minuteBars.cached ? counters.cached++ : counters.fetched++;
 
-  // The window has to reach from before the rating to +30 trading days after
+  // The window has to reach from before the rating to +30 calendar days after
   // it. Asking for "the last 90 rows" measured from today does neither: at two
   // or three session rows per date that is only ~40 calendar days, so a rating
   // older than that has no bar at or before it and prices out as blank.
-  const dailyEnd = new Date(Math.min(ratedMs + 45 * 24 * 3600_000, Date.now()))
-    .toISOString()
-    .slice(0, 10);
+  //
+  // One series per ticker-MONTH, not per rating date: six months of daily bars
+  // anchored past the end of the month covers every rating in it and its +30d
+  // tail, so twelve ratings on the same name in the same month cost one call
+  // between them instead of twelve. That is the difference between a filter
+  // finishing and a filter timing out.
+  const { key: monthKey, endDate: dailyEnd } = dailyWindowFor(day);
 
   const dailyBars = await getOrFetch<OhlcBarRaw[]>(
-    callKey('uw', 'ohlc', event.ticker, '1d', day),
+    callKey('uw', 'ohlc', event.ticker, '1d', monthKey),
     {
       provider: 'uw',
       endpoint: '/api/stock/{ticker}/ohlc/1d',
@@ -245,14 +270,27 @@ async function enrichEventWindows(
       client.ohlc(event.ticker, '1d', {
         end_date: dailyEnd,
         timeframe: '6M',
-        limit: 500,
+        limit: 2500,
       })
   );
   dailyBars.cached ? counters.cached++ : counters.fetched++;
 
   const daily = oneBarPerDate(dailyBars.value);
   const t0 = priceAt(minuteBars.value, ratedMs) ?? priceAt(daily, ratedMs);
-  const t0Ms = t0 ? new Date(t0.barAt).getTime() : ratedMs;
+
+  // No anchor price means no row is worth writing, and — more to the point —
+  // nothing worth marking as done. Stamping a rating that priced out blank is
+  // what turned a transient miss into a permanently empty row: the next pass
+  // saw it as current and never looked again. Fail loudly instead, so the run
+  // reports it and a later run retries it (off cached bars, so retrying is
+  // nearly free).
+  if (!t0) {
+    throw new Error(
+      `no price at ${event.rated_at} — ${minuteBars.value.length} minute bars, ${daily.length} daily bars`
+    );
+  }
+
+  const t0Ms = new Date(t0.barAt).getTime();
 
   interface WindowRow {
     event_key: string;
@@ -266,9 +304,9 @@ async function enrichEventWindows(
     {
       event_key: event.event_key,
       window_label: 't0',
-      price: t0?.price ?? null,
-      bar_at: t0?.barAt ?? null,
-      pct_from_t0: t0 ? 0 : null,
+      price: t0.price,
+      bar_at: t0.barAt,
+      pct_from_t0: 0,
     },
   ];
 
@@ -286,7 +324,7 @@ async function enrichEventWindows(
       price: hit?.price ?? null,
       bar_at: hit?.barAt ?? null,
       pct_from_t0:
-        hit && t0 && t0.price > 0 ? ((hit.price - t0.price) / t0.price) * 100 : null,
+        hit && t0.price > 0 ? ((hit.price - t0.price) / t0.price) * 100 : null,
     });
   };
 
@@ -294,20 +332,20 @@ async function enrichEventWindows(
   for (const w of WINDOWS) {
     const at = ratedMs + w.minutes * 60_000;
     if (at > now) continue; // Not yet in the past — leave it for a later run.
-    push(w.label, t0 ? priceAt(minuteBars.value, at, t0Ms) : null);
+    push(w.label, priceAt(minuteBars.value, at, t0Ms));
   }
 
   // EOD is the official close of the rating's own session, taken from the daily
   // bar — not the last post-market print, which is what the minute feed ends on.
   const ratedDate = ratedAt.toISOString().slice(0, 10);
   if (ratedMs + 24 * 3600_000 <= now) {
-    push('eod', t0 ? closeOnOrBefore(daily, ratedDate) : null);
+    push('eod', closeOnOrBefore(daily, ratedDate));
   }
 
   for (const w of DAY_WINDOWS) {
     const at = ratedMs + w.days * 24 * 3600_000;
     if (at > now) continue;
-    push(w.label, t0 ? closeOnOrBefore(daily, addDays(ratedDate, w.days)) : null);
+    push(w.label, closeOnOrBefore(daily, addDays(ratedDate, w.days)));
   }
 
   const supabase = createAdminClient();
@@ -326,11 +364,6 @@ async function enrichEventWindows(
 }
 
 /**
- * Enrich a bounded batch. The caller loops until `remaining` is 0, which keeps
- * every request short enough for a serverless function and gives the UI
- * something to show progress with.
- */
-/**
  * Enrich a bounded slice of work.
  *
  * Bounded by TIME as well as count: each rating needs two OHLC calls plus a
@@ -339,92 +372,140 @@ async function enrichEventWindows(
  * sees a gateway error with no JSON in it, and the progress bar reports
  * nothing even though work was done. Returning early with an accurate
  * `remaining` keeps every pass short and every number honest.
+ *
+ * The slice is chosen by the database (`research_outstanding_events`), not
+ * here. The previous version read every selected key back a hundred at a time
+ * and filtered in JavaScript — twenty round trips per pass for a thousand
+ * rows, before a single price was fetched — and then reported progress as a
+ * count the caller could only guess against. Now the caller gets the keys that
+ * actually finished, so it can shrink its own list and stop for certain.
  */
 export async function enrichPrices(
   eventKeys: string[],
-  batchSize = 10,
+  batchSize = 150,
   force = false,
-  budgetMs = 20_000
+  budgetMs = 45_000
 ): Promise<EnrichResult> {
   const startedAt = Date.now();
   const outOfTime = () => Date.now() - startedAt > budgetMs;
   const supabase = createAdminClient();
   const client = await UnusualWhalesClient.create();
 
-  // Read the ratings in chunks: a few hundred keys in one `in.()` makes for a
-  // very long URL, and the response is capped at 1000 rows regardless.
   interface EventRow {
     event_key: string;
     ticker: string;
     rated_at: string;
-    windows_pulled_at: string | null;
+    outstanding_total: number;
   }
 
-  const events: EventRow[] = [];
-  for (let i = 0; i < eventKeys.length; i += 100) {
+  // `force` re-prices rows that are already current, so it cannot use the
+  // outstanding-work query — take the head of the caller's own list instead.
+  let batch: EventRow[];
+  let outstanding: number;
+  if (force) {
+    const keys = eventKeys.slice(0, batchSize);
     const { data, error } = await supabase
       .from('uw_analyst_ratings')
-      .select('event_key, ticker, rated_at, windows_pulled_at')
-      .in('event_key', eventKeys.slice(i, i + 100));
+      .select('event_key, ticker, rated_at')
+      .in('event_key', keys);
     if (error) throw new Error(error.message);
-    events.push(...((data ?? []) as EventRow[]));
+    batch = ((data ?? []) as Omit<EventRow, 'outstanding_total'>[]).map((e) => ({
+      ...e,
+      outstanding_total: eventKeys.length,
+    }));
+    outstanding = eventKeys.length;
+  } else {
+    const { data, error } = await supabase.rpc('research_outstanding_events', {
+      p_keys: eventKeys,
+      p_limit: batchSize,
+    });
+    if (error) throw new Error(error.message);
+    batch = (data ?? []) as EventRow[];
+    outstanding = batch.length > 0 ? Number(batch[0].outstanding_total) : 0;
   }
-
-  /**
-   * A rating needs work when more windows should exist now than existed when
-   * it was last pulled — so a rating priced an hour in comes back once its +1d
-   * has elapsed. Comparing two counts on the rating itself keeps this O(1) per
-   * row; the previous version read every window row back and silently lost
-   * everything past the 1000-row response cap, which froze the run at ~100.
-   */
-  const now = Date.now();
-  const todo = events.filter((e) => {
-    if (force) return true;
-    if (!e.windows_pulled_at) return true;
-    const expectedNow = expectedWindows(e.rated_at, now).length;
-    const expectedThen = expectedWindows(
-      e.rated_at,
-      new Date(e.windows_pulled_at).getTime()
-    ).length;
-    return expectedNow > expectedThen;
-  });
-  const batch = todo.slice(0, batchSize);
 
   const counters = { fetched: 0, cached: 0 };
   const errors: { ticker: string; error: string }[] = [];
+  const processedKeys: string[] = [];
+  const failedKeys: string[] = [];
   let failed = 0;
-  let processed = 0;
 
-  for (const e of batch) {
-    if (outOfTime()) break;
-
-    // Company info and the quote come first: they drive market cap, the
-    // current price and the upside for every rating on this ticker.
-    try {
-      await enrichTickerInfo(client, e.ticker, counters, force);
-    } catch (err) {
-      failed++;
-      errors.push({
-        ticker: e.ticker,
-        error: err instanceof Error ? err.message : 'info failed',
-      });
-    }
-
-    try {
-      await enrichEventWindows(
-        client,
-        { event_key: e.event_key, ticker: e.ticker, rated_at: e.rated_at },
-        counters
-      );
-      processed++;
-    } catch (err) {
-      failed++;
-      errors.push({
-        ticker: e.ticker,
-        error: err instanceof Error ? err.message : 'prices failed',
-      });
+  /**
+   * Company facts and the last quote, at most once per ticker per pass and
+   * only when what we already hold has gone stale. The quote's own cache entry
+   * lives for a minute, so without this gate every pass refetched a quote for
+   * every ticker in the batch — a thousand-row filter spent more of its API
+   * budget on quotes it already had than on the prices it was asked for, and
+   * spent it into the rate limiter.
+   */
+  const INFO_MAX_AGE_MS = 15 * 60 * 1000;
+  const fresh = new Set<string>();
+  if (!force) {
+    const tickers = Array.from(new Set(batch.map((e) => e.ticker)));
+    for (let i = 0; i < tickers.length; i += 200) {
+      const { data } = await supabase
+        .from('uw_ticker_info')
+        .select('ticker, updated_at')
+        .in('ticker', tickers.slice(i, i + 200));
+      for (const row of (data ?? []) as { ticker: string; updated_at: string | null }[]) {
+        if (row.updated_at && Date.now() - new Date(row.updated_at).getTime() < INFO_MAX_AGE_MS) {
+          fresh.add(row.ticker);
+        }
+      }
     }
   }
+
+  const infoOnce = new Map<string, Promise<void>>();
+  const ensureInfo = (ticker: string): Promise<void> => {
+    if (fresh.has(ticker)) return Promise.resolve();
+    let pending = infoOnce.get(ticker);
+    if (!pending) {
+      pending = enrichTickerInfo(client, ticker, counters, force).catch((err) => {
+        // Missing company facts must not cost the rating its prices — record
+        // the problem and carry on into the windows, which is what was asked
+        // for.
+        errors.push({
+          ticker,
+          error: err instanceof Error ? err.message : 'info failed',
+        });
+      });
+      infoOnce.set(ticker, pending);
+    }
+    return pending;
+  };
+
+  // A few ratings in flight at once. Each is mostly waiting on the API, so
+  // this is where the throughput comes from — but kept low enough to stay
+  // polite to the rate limiter, which is the real ceiling.
+  const CONCURRENCY = 6;
+  const queue = [...batch];
+
+  const worker = async (): Promise<void> => {
+    while (queue.length > 0 && !outOfTime()) {
+      const e = queue.shift();
+      if (!e) return;
+
+      await ensureInfo(e.ticker);
+
+      try {
+        await enrichEventWindows(
+          client,
+          { event_key: e.event_key, ticker: e.ticker, rated_at: e.rated_at },
+          counters
+        );
+        processedKeys.push(e.event_key);
+      } catch (err) {
+        failed++;
+        failedKeys.push(e.event_key);
+        errors.push({
+          ticker: e.ticker,
+          error: err instanceof Error ? err.message : 'prices failed',
+        });
+      }
+    }
+  };
+
+  await Promise.all(Array.from({ length: CONCURRENCY }, () => worker()));
 
   return {
     fetched: counters.fetched,
@@ -432,7 +513,9 @@ export async function enrichPrices(
     failed,
     // Count what actually finished, not what was selected — a pass cut short
     // by the budget must not report the whole batch as done.
-    remaining: Math.max(0, todo.length - processed),
+    remaining: Math.max(0, outstanding - processedKeys.length),
+    processedKeys,
+    failedKeys,
     errors: errors.slice(0, 10),
   };
 }

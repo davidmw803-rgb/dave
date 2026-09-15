@@ -79,7 +79,11 @@ rather than requiring another pull; hit **Pull ratings** only when you want more
 data from the API.
 
 The client walks every page of matches (1000 per request) rather than taking the
-first response, so filtering and export always see the whole set. The table pages
+first response, so filtering and export always see the whole set. There is no
+row ceiling anywhere in the path — pull, load, page, export and enrich all run
+to whatever the filters match; the only guards left are against a cursor that
+stops advancing. Loading tens of thousands of rows is therefore possible and
+slow: narrow the dates first if the link is poor. The table pages
 through it — 100/300/500/1000 per page — while **Export CSV** and both enrich
 buttons act on every filtered row across all pages, not just the visible page.
 

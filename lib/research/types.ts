@@ -35,6 +35,13 @@ export interface EnrichResult {
   cached: number;
   failed: number;
   remaining: number;
+  /**
+   * Which ratings this pass settled, one way or the other. The caller drops
+   * them from its own list, so the next pass carries only what is left and the
+   * loop ends on an empty list rather than on a guess about `remaining`.
+   */
+  processedKeys?: string[];
+  failedKeys?: string[];
   errors: { ticker: string; error: string }[];
 }
 

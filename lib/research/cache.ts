@@ -81,6 +81,12 @@ export async function getOrFetch<T>(
     return { value, cached: false };
   } catch (e) {
     const message = e instanceof Error ? e.message : 'request failed';
+
+    // A rate limit or a 5xx says "not now", not "no". Caching those would
+    // lock the affected calls out for five minutes and make a burst of 429s
+    // look like permanent data loss.
+    if ((e as { retryable?: boolean }).retryable === true) throw e;
+
     // Short negative cache: long enough to stop a retry storm, short enough
     // that a transient outage doesn't poison the day.
     await supabase.from('api_call_cache').upsert(
