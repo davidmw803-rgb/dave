@@ -74,12 +74,15 @@ export async function enrichTipranks(
 
   // Anything fetched inside the TTL is already good.
   const cutoff = new Date(Date.now() - TTL.tipranks).toISOString();
-  const { data: fresh } = await supabase
-    .from('tipranks_research')
-    .select('ticker, fetched_at')
-    .in('ticker', unique.slice(0, 1000))
-    .gte('fetched_at', cutoff);
-  const done = new Set((fresh ?? []).map((r) => r.ticker as string));
+  const done = new Set<string>();
+  for (let i = 0; i < unique.length; i += 500) {
+    const { data: fresh } = await supabase
+      .from('tipranks_research')
+      .select('ticker, fetched_at')
+      .in('ticker', unique.slice(i, i + 500))
+      .gte('fetched_at', cutoff);
+    for (const r of fresh ?? []) done.add(r.ticker as string);
+  }
 
   const todo = unique.filter((t) => !done.has(t));
   const batch = todo.slice(0, batchSize);

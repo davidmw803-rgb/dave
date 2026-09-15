@@ -43,17 +43,29 @@ export async function refreshAnalystStats(
 ): Promise<AnalystRefreshResult> {
   const supabase = createAdminClient();
 
-  let q = supabase
-    .from('uw_analyst_ratings')
-    .select('event_key, ticker, analyst_key, analyst_name, firm, recommendation, target, rated_at')
-    .not('analyst_name', 'is', null)
-    .limit(20000);
-  if (analystKeys.length > 0) q = q.in('analyst_key', analystKeys.slice(0, 500));
+  // Read every rating in pages: a fixed limit here would quietly score
+  // analysts on a subset once the table outgrew it.
+  const PAGE = 1000;
+  const rows: RatingRow[] = [];
 
-  const { data: ratings, error } = await q;
-  if (error) throw new Error(error.message);
+  for (let offset = 0; ; offset += PAGE) {
+    let q = supabase
+      .from('uw_analyst_ratings')
+      .select('event_key, ticker, analyst_key, analyst_name, firm, recommendation, target, rated_at')
+      .not('analyst_name', 'is', null)
+      .order('event_key', { ascending: true })
+      .range(offset, offset + PAGE - 1);
+    // Callers pass either nothing (every analyst) or the handful behind one
+    // row, so this key list is a shape rather than a truncation.
+    if (analystKeys.length > 0) q = q.in('analyst_key', analystKeys.slice(0, 500));
 
-  const rows = (ratings ?? []) as RatingRow[];
+    const { data, error } = await q;
+    if (error) throw new Error(error.message);
+
+    const batch = (data ?? []) as RatingRow[];
+    rows.push(...batch);
+    if (batch.length < PAGE) break;
+  }
   if (rows.length === 0) return { analysts: 0, scoredRatings: 0 };
 
   // Price moves for those ratings, plus the ticker prices behind the upside.

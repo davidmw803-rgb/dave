@@ -150,7 +150,7 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
   const [recommendation, setRecommendation] = useState('');
   const [newerThan, setNewerThan] = useState('');
   const [olderThan, setOlderThan] = useState('');
-  const [maxRows, setMaxRows] = useState('1000');
+  const [maxRows, setMaxRows] = useState('5000');
 
   // Tier 2 + 3 — applied to the rows we hold
   const [firm, setFirm] = useState('');
@@ -292,12 +292,13 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
     if (recommendation) base.set('rating', recommendation);
 
     const PAGE = 1000;
-    const HARD_CAP = 20000;
+    // No row ceiling — page until the server says there is nothing left. The
+    // guard is only against a server that never stops claiming more.
+    const MAX_PAGES = 1000;
     const collected: ResearchRow[] = [];
 
-    // Walk every page that matches, so filtering and export see the whole set
-    // rather than whatever happened to fit in the first response.
-    for (let offset = 0; offset < HARD_CAP; offset += PAGE) {
+    for (let pageIndex = 0; pageIndex < MAX_PAGES; pageIndex++) {
+      const offset = pageIndex * PAGE;
       const params = new URLSearchParams(base);
       params.set('limit', String(PAGE));
       params.set('offset', String(offset));
@@ -346,7 +347,7 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
     }
 
     setRows(collected);
-    setTruncated(collected.length >= HARD_CAP);
+    setTruncated(false);
     setStale(false);
     setProgress(null);
     return true;
@@ -442,7 +443,9 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
       let stalledPasses = 0;
       let consecutiveFailures = 0;
 
-      for (let guard = 0; guard < 400; guard++) {
+      // Enough passes for any backlog; the loop exits on remaining === 0, on
+      // three stalled passes, or on three consecutive failures.
+      for (let guard = 0; guard < 5000; guard++) {
         setProgress({
           label: kind === 'prices' ? 'Pulling price history' : 'Pulling TipRanks',
           done,
@@ -1236,11 +1239,12 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
               onChange={(e) => setPageSize(Number(e.target.value))}
               className="h-7 w-20 text-xs"
             >
-              {[100, 300, 500, 1000].map((n) => (
+              {[100, 300, 500, 1000, 5000].map((n) => (
                 <option key={n} value={n}>
                   {n}
                 </option>
               ))}
+              <option value={1000000}>All</option>
             </Select>
           </label>
         </div>

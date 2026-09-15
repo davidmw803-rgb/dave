@@ -4,8 +4,10 @@ import { createAdminClient } from '@/lib/supabase/admin';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+// Per-request page size only. There is no cap on how many rows can be read in
+// total: the client pages until the server says there are no more.
 const DEFAULT_LIMIT = 1000;
-const MAX_LIMIT = 2000;
+const MAX_LIMIT = 5000;
 
 /**
  * Rows for the research table.

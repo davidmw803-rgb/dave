@@ -9,8 +9,10 @@ import { paramsHash, ratingEventKey } from './keys';
 import type { PullFilters, PullResult } from './types';
 
 const PAGE_SIZE = 500; // UW's maximum
-const DEFAULT_MAX_ROWS = 2000;
-const MAX_PAGES_PER_TICKER = 20; // hard stop so a bad cursor can't loop forever
+const DEFAULT_MAX_ROWS = 5000;
+// Only a guard against a cursor that stops advancing — with 500 rows a page
+// this still allows 250k rows per ticker sweep.
+const MAX_PAGES_PER_TICKER = 500;
 
 function toNumber(v: unknown): number | null {
   if (v === null || v === undefined || v === '') return null;
@@ -53,7 +55,7 @@ export async function pullRatings(filters: PullFilters): Promise<PullResult> {
   const supabase = createAdminClient();
   const client = await UnusualWhalesClient.create();
 
-  const maxRows = Math.max(1, Math.min(filters.maxRows ?? DEFAULT_MAX_ROWS, 20000));
+  const maxRows = Math.max(1, filters.maxRows ?? DEFAULT_MAX_ROWS);
   const tickers = (filters.tickers ?? []).map((t) => t.trim().toUpperCase()).filter(Boolean);
 
   const params = {
