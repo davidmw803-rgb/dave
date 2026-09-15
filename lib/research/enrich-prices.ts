@@ -355,10 +355,15 @@ async function enrichEventWindows(
   if (error) throw new Error(error.message);
 
   // Stamp the rating so the next pass can tell it is current without reading
-  // its window rows back.
+  // its window rows back, and keep the anchor price on the rating itself: the
+  // table's view reads it from here rather than aggregating the window table,
+  // which is what stopped a single page costing a scan of every window row.
   const { error: stampError } = await supabase
     .from('uw_analyst_ratings')
-    .update({ windows_pulled_at: new Date().toISOString() })
+    .update({
+      windows_pulled_at: new Date().toISOString(),
+      price_t0: t0.price,
+    })
     .eq('event_key', event.event_key);
   if (stampError) throw new Error(stampError.message);
 }
