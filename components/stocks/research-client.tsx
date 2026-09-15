@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Table,
   TableBody,
@@ -140,6 +140,8 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
   const [message, setMessage] = useState<string | null>(null);
   const [stale, setStale] = useState(false);
   const [truncated, setTruncated] = useState(false);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(300);
   const [error, setError] = useState<string | null>(null);
 
   // Tier 1 — sent to Unusual Whales
@@ -237,6 +239,35 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
     timeTo,
   ]);
 
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const pageRows = useMemo(
+    () => filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize),
+    [filtered, currentPage, pageSize]
+  );
+
+  // Changing what is filtered can leave you past the end of the results.
+  useEffect(() => {
+    setPage(1);
+  }, [
+    rows,
+    tickers,
+    action,
+    recommendation,
+    newerThan,
+    olderThan,
+    firm,
+    sector,
+    analyst,
+    minCap,
+    maxCap,
+    minUpside,
+    weekdays,
+    timeFrom,
+    timeTo,
+    pageSize,
+  ]);
+
   /** Selected rows, or everything currently filtered when nothing is ticked. */
   const targetRows = useMemo(
     () => (selected.size > 0 ? filtered.filter((r) => selected.has(r.event_key)) : filtered),
@@ -252,39 +283,73 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
   const refresh = useCallback(async (runId?: string): Promise<boolean> => {
     // Send the pull filters along: the table can only filter rows it has, so
     // asking for "the newest N" would hide anything older that was just pulled.
-    const params = new URLSearchParams();
-    if (runId) params.set('runId', runId);
-    if (newerThan) params.set('from', newerThan);
-    if (olderThan) params.set('to', olderThan);
-    if (tickers.trim()) params.set('tickers', tickers);
-    if (action) params.set('action', action);
-    if (recommendation) params.set('rating', recommendation);
-    const qs = params.toString() ? `?${params.toString()}` : '';
+    const base = new URLSearchParams();
+    if (runId) base.set('runId', runId);
+    if (newerThan) base.set('from', newerThan);
+    if (olderThan) base.set('to', olderThan);
+    if (tickers.trim()) base.set('tickers', tickers);
+    if (action) base.set('action', action);
+    if (recommendation) base.set('rating', recommendation);
 
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-      try {
-        const res = await fetch(`/api/research/rows${qs}`, { signal: controller.signal });
-        const body = (await res.json().catch(() => null)) as
-          | { rows?: unknown; truncated?: boolean }
-          | null;
-        if (res.ok && body && Array.isArray(body.rows)) {
-          setRows(body.rows as ResearchRow[]);
-          setTruncated(body.truncated === true);
+    const PAGE = 1000;
+    const HARD_CAP = 20000;
+    const collected: ResearchRow[] = [];
+
+    // Walk every page that matches, so filtering and export see the whole set
+    // rather than whatever happened to fit in the first response.
+    for (let offset = 0; offset < HARD_CAP; offset += PAGE) {
+      const params = new URLSearchParams(base);
+      params.set('limit', String(PAGE));
+      params.set('offset', String(offset));
+
+      type RowsPage = { rows?: unknown; total?: number; hasMore?: boolean };
+      let page: RowsPage | null = null;
+
+      for (let attempt = 0; attempt < 3 && !page; attempt++) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+        try {
+          const res = await fetch(`/api/research/rows?${params.toString()}`, {
+            signal: controller.signal,
+          });
+          const body = (await res.json().catch(() => null)) as RowsPage | null;
+          if (res.ok && body && Array.isArray(body.rows)) page = body;
+        } catch {
+          // Retry below.
+        } finally {
+          clearTimeout(timer);
+        }
+        if (!page && attempt < 2) {
+          await new Promise((r) => setTimeout(r, 1000 * (attempt * 2 + 1)));
+        }
+      }
+
+      if (!page) {
+        // Keep whatever pages did arrive rather than throwing the lot away.
+        if (collected.length > 0) {
+          setRows(collected);
+          setTruncated(true);
           setStale(false);
           return true;
         }
-      } catch {
-        // Fall through to the retry.
-      } finally {
-        clearTimeout(timer);
+        setStale(true);
+        return false;
       }
-      if (attempt < 2) await new Promise((r) => setTimeout(r, 1000 * (attempt * 2 + 1)));
+
+      collected.push(...(page.rows as ResearchRow[]));
+      if (collected.length > PAGE) setProgress({
+        label: 'Loading ratings',
+        done: collected.length,
+        total: page.total ?? collected.length,
+      });
+      if (!page.hasMore) break;
     }
 
-    setStale(true);
-    return false;
+    setRows(collected);
+    setTruncated(collected.length >= HARD_CAP);
+    setStale(false);
+    setProgress(null);
+    return true;
   }, [newerThan, olderThan, tickers, action, recommendation]);
 
   const pull = async () => {
@@ -600,7 +665,7 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
             size="sm"
             onClick={exportCsv}
             disabled={targetRows.length === 0}
-            title="Download the rows these filters show, as CSV"
+            title="Download every row these filters show - all pages, not just this one"
           >
             Export CSV ({targetRows.length.toLocaleString()})
           </Button>
@@ -976,14 +1041,14 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filtered.length === 0 ? (
+              {pageRows.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={30} className="py-8 text-center text-xs text-neutral-500">
                     No ratings yet. Set your filters and hit <strong>Pull ratings</strong>.
                   </TableCell>
                 </TableRow>
               ) : (
-                filtered.slice(0, 300).map((r) => (
+                pageRows.map((r) => (
                   <TableRow key={r.event_key} className={cn(selected.has(r.event_key) && 'bg-neutral-900')}>
                     <TableCell className="sticky left-0 z-10 bg-neutral-950">
                       <input
@@ -1124,13 +1189,66 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
         </CardContent>
       </Card>
 
-      {filtered.length > 300 ? (
-        <p className="text-xs text-neutral-500">
-          Showing the first 300 of {filtered.length.toLocaleString()} rows. Narrow the
-          filters to see the rest — enrichment still applies to all{' '}
-          {targetRows.length.toLocaleString()}.
-        </p>
-      ) : null}
+      <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-neutral-400">
+        <div className="flex items-center gap-2">
+          <span>
+            {filtered.length === 0
+              ? 'No rows'
+              : `Rows ${((currentPage - 1) * pageSize + 1).toLocaleString()}-${Math.min(
+                  currentPage * pageSize,
+                  filtered.length
+                ).toLocaleString()} of ${filtered.length.toLocaleString()}`}
+          </span>
+          <span className="text-neutral-600">|</span>
+          <label className="flex items-center gap-1.5">
+            <span className="text-neutral-500">Per page</span>
+            <Select
+              value={String(pageSize)}
+              onChange={(e) => setPageSize(Number(e.target.value))}
+              className="h-7 w-20 text-xs"
+            >
+              {[100, 300, 500, 1000].map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+            </Select>
+          </label>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <span>
+            Page {currentPage} of {totalPages}
+          </span>
+          <Button variant="outline" size="sm" disabled={currentPage <= 1} onClick={() => setPage(1)}>
+            First
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={currentPage <= 1}
+            onClick={() => setPage(currentPage - 1)}
+          >
+            Previous
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={currentPage >= totalPages}
+            onClick={() => setPage(currentPage + 1)}
+          >
+            Next
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={currentPage >= totalPages}
+            onClick={() => setPage(totalPages)}
+          >
+            Last
+          </Button>
+        </div>
+      </div>
     </div>
   );
 }

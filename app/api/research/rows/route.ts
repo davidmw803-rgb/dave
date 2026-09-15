@@ -29,6 +29,7 @@ export async function GET(req: NextRequest) {
   const action = params.get('action');
   const rating = params.get('rating');
   const limit = Math.min(Number(params.get('limit') ?? DEFAULT_LIMIT) || DEFAULT_LIMIT, MAX_LIMIT);
+  const offset = Math.max(0, Number(params.get('offset') ?? 0) || 0);
 
   try {
     const supabase = createAdminClient();
@@ -42,14 +43,21 @@ export async function GET(req: NextRequest) {
         .limit(limit);
       if (error) throw new Error(error.message);
       keys = (data ?? []).map((r) => r.event_key as string);
-      if (keys.length === 0) return NextResponse.json({ rows: [], truncated: false });
+      if (keys.length === 0) {
+        return NextResponse.json({ rows: [], total: 0, offset, hasMore: false });
+      }
     }
 
     let q = supabase
       .from('uw_research_rows')
-      .select('*')
+      // An exact count lets the client fetch the remaining pages without
+      // guessing, and lets the table say how many matches exist in total.
+      .select('*', { count: 'exact' })
       .order('rated_at', { ascending: false })
-      .limit(limit);
+      // A stable tiebreak: two ratings can share a timestamp, and without it
+      // paging by offset can repeat or skip one.
+      .order('event_key', { ascending: true })
+      .range(offset, offset + limit - 1);
 
     if (keys) q = q.in('event_key', keys);
     if (from) q = q.gte('rated_at', `${from}T00:00:00Z`);
@@ -64,11 +72,17 @@ export async function GET(req: NextRequest) {
     if (action) q = q.eq('action', action);
     if (rating) q = q.eq('recommendation', rating);
 
-    const { data, error } = await q;
+    const { data, error, count } = await q;
     if (error) throw new Error(error.message);
 
     const rows = data ?? [];
-    return NextResponse.json({ rows, truncated: rows.length >= limit });
+    const total = count ?? rows.length;
+    return NextResponse.json({
+      rows,
+      total,
+      offset,
+      hasMore: offset + rows.length < total,
+    });
   } catch (e) {
     const message = e instanceof Error ? e.message : 'Could not load rows.';
     const timedOut = /statement timeout|canceling statement/i.test(message);
