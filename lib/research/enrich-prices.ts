@@ -61,6 +61,25 @@ function barTime(bar: OhlcBarRaw): number {
   return NaN;
 }
 
+/**
+ * The daily feed returns a row per market session — pre, regular and post —
+ * so a date can appear two or three times with different closes. Keep one row
+ * per date, preferring the regular session, so "the close" is the official
+ * close rather than whichever session happened to come first in the array.
+ */
+function oneBarPerDate(bars: OhlcBarRaw[]): OhlcBarRaw[] {
+  const best = new Map<string, OhlcBarRaw>();
+  for (const bar of bars) {
+    const date = bar.date ?? (bar.end_time ?? bar.start_time)?.slice(0, 10);
+    if (!date) continue;
+    const current = best.get(date);
+    if (!current || (bar.market_time === 'r' && current.market_time !== 'r')) {
+      best.set(date, bar);
+    }
+  }
+  return Array.from(best.values());
+}
+
 /** Trading date of a bar, for day-window matching. */
 function barDate(bar: OhlcBarRaw): string | null {
   if (bar.date) return bar.date;
@@ -205,20 +224,34 @@ async function enrichEventWindows(
   );
   minuteBars.cached ? counters.cached++ : counters.fetched++;
 
+  // The window has to reach from before the rating to +30 trading days after
+  // it. Asking for "the last 90 rows" measured from today does neither: at two
+  // or three session rows per date that is only ~40 calendar days, so a rating
+  // older than that has no bar at or before it and prices out as blank.
+  const dailyEnd = new Date(Math.min(ratedMs + 45 * 24 * 3600_000, Date.now()))
+    .toISOString()
+    .slice(0, 10);
+
   const dailyBars = await getOrFetch<OhlcBarRaw[]>(
     callKey('uw', 'ohlc', event.ticker, '1d', day),
     {
       provider: 'uw',
       endpoint: '/api/stock/{ticker}/ohlc/1d',
-      args: { ticker: event.ticker, end_date: day, timeframe: '3M' },
+      args: { ticker: event.ticker, end_date: dailyEnd, timeframe: '6M' },
       // Trailing daily bars keep arriving, so this one ages out.
       ttlMs: TTL.info,
     },
-    () => client.ohlc(event.ticker, '1d', { timeframe: '3M', limit: 90 })
+    () =>
+      client.ohlc(event.ticker, '1d', {
+        end_date: dailyEnd,
+        timeframe: '6M',
+        limit: 500,
+      })
   );
   dailyBars.cached ? counters.cached++ : counters.fetched++;
 
-  const t0 = priceAt(minuteBars.value, ratedMs) ?? priceAt(dailyBars.value, ratedMs);
+  const daily = oneBarPerDate(dailyBars.value);
+  const t0 = priceAt(minuteBars.value, ratedMs) ?? priceAt(daily, ratedMs);
   const t0Ms = t0 ? new Date(t0.barAt).getTime() : ratedMs;
 
   interface WindowRow {
@@ -268,13 +301,13 @@ async function enrichEventWindows(
   // bar — not the last post-market print, which is what the minute feed ends on.
   const ratedDate = ratedAt.toISOString().slice(0, 10);
   if (ratedMs + 24 * 3600_000 <= now) {
-    push('eod', t0 ? closeOnOrBefore(dailyBars.value, ratedDate) : null);
+    push('eod', t0 ? closeOnOrBefore(daily, ratedDate) : null);
   }
 
   for (const w of DAY_WINDOWS) {
     const at = ratedMs + w.days * 24 * 3600_000;
     if (at > now) continue;
-    push(w.label, t0 ? closeOnOrBefore(dailyBars.value, addDays(ratedDate, w.days)) : null);
+    push(w.label, t0 ? closeOnOrBefore(daily, addDays(ratedDate, w.days)) : null);
   }
 
   const supabase = createAdminClient();
