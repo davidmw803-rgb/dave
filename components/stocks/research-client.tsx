@@ -419,7 +419,19 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
     }
   };
 
-  /** Loop the batched enrichment endpoint until it reports nothing remaining. */
+  /**
+   * Loop the batched enrichment endpoint until every selected rating has been
+   * settled — priced, or tried and failed.
+   *
+   * The loop tracks its own list rather than trusting a count. Each pass hands
+   * back the keys it finished; those come off the list, so the list shrinks
+   * monotonically and the loop ends when it is empty. The previous version
+   * resent all of the keys every pass and inferred progress from `remaining`,
+   * which meant a pass that spent its budget on API backoff looked identical to
+   * one that could not make progress at all — three of those and it gave up
+   * silently, leaving most of the table blank while the summary claimed
+   * success.
+   */
   const enrich = async (kind: 'prices' | 'tipranks') => {
     if (targetRows.length === 0) {
       setError('Nothing to enrich — pull some ratings first.');
@@ -429,26 +441,28 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
     setError(null);
     setMessage(null);
 
-    const eventKeys = targetRows.map((r) => r.event_key);
     const tickerList = Array.from(new Set(targetRows.map((r) => r.ticker)));
-    const total = kind === 'prices' ? eventKeys.length : tickerList.length;
+    const total = kind === 'prices' ? targetRows.length : tickerList.length;
 
+    let pending = targetRows.map((r) => r.event_key);
     let fetched = 0;
     let cached = 0;
     let failed = 0;
-    let done = 0;
+    let settled = 0;
+    let priced = 0;
     let firstError: string | null = null;
+    let stopped: string | null = null;
 
     try {
       let stalledPasses = 0;
       let consecutiveFailures = 0;
 
-      // Enough passes for any backlog; the loop exits on remaining === 0, on
-      // three stalled passes, or on three consecutive failures.
-      for (let guard = 0; guard < 5000; guard++) {
+      for (let guard = 0; guard < 20000; guard++) {
+        if (kind === 'prices' && pending.length === 0) break;
+
         setProgress({
           label: kind === 'prices' ? 'Pulling price history' : 'Pulling TipRanks',
-          done,
+          done: kind === 'prices' ? total - pending.length : settled,
           total,
           note: stalledPasses > 0 ? 'retrying…' : undefined,
         });
@@ -456,14 +470,16 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
         const res = await postJson(
           '/api/research/enrich',
           kind === 'prices'
-            ? { kind, eventKeys, batchSize: 40 }
-            : { kind, tickers: tickerList, batchSize: 40 }
+            ? { kind, eventKeys: pending, batchSize: 150 }
+            : { kind, tickers: tickerList, batchSize: 100 }
         );
         const body = res.body as {
           fetched?: number;
           cached?: number;
           failed?: number;
           remaining?: number;
+          processedKeys?: string[];
+          failedKeys?: string[];
           errors?: { ticker: string; error: string }[];
           error?: string;
         };
@@ -471,9 +487,7 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
         if (!res.ok) {
           consecutiveFailures += 1;
           if (consecutiveFailures >= 3) {
-            setError(
-              `${body.error ?? 'Enrichment failed.'} Stopped at ${done} of ${total}; progress is saved, so clicking again resumes.`
-            );
+            stopped = body.error ?? 'The server stopped answering.';
             break;
           }
           // Give it a moment and try the same slice again.
@@ -485,21 +499,43 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
         fetched += body.fetched ?? 0;
         cached += body.cached ?? 0;
         failed += body.failed ?? 0;
+        priced += body.processedKeys?.length ?? 0;
         if (!firstError && body.errors && body.errors.length > 0) {
           firstError = `${body.errors[0].ticker}: ${body.errors[0].error}`;
         }
 
-        const previousDone = done;
-        done = Math.max(0, total - (body.remaining ?? 0));
-        if ((body.remaining ?? 0) <= 0) break;
+        if (kind !== 'prices') {
+          settled = Math.max(0, total - (body.remaining ?? 0));
+          if ((body.remaining ?? 0) <= 0) break;
+          stalledPasses = (body.fetched ?? 0) > 0 ? 0 : stalledPasses + 1;
+          if (stalledPasses >= 3) {
+            stopped = 'the last three passes made no progress';
+            break;
+          }
+          continue;
+        }
 
-        // A pass that moves nothing means the remaining rows can't be
-        // satisfied — stop rather than spin, and say so.
-        stalledPasses = done > previousDone ? 0 : stalledPasses + 1;
+        // Anything the pass settled comes off the list: priced rows are done,
+        // and a row that failed is not retried in this run — it would just fail
+        // again behind the same broken ticker and stall the whole list.
+        const gone = new Set([
+          ...(body.processedKeys ?? []),
+          ...(body.failedKeys ?? []),
+        ]);
+        const before = pending.length;
+        pending = pending.filter((k) => !gone.has(k));
+        settled = total - pending.length;
+
+        // Nothing outstanding on the server: the rest of the list was already
+        // current, so there is no more work to ask for.
+        if ((body.remaining ?? 0) <= 0) {
+          pending = [];
+          break;
+        }
+
+        stalledPasses = pending.length < before ? 0 : stalledPasses + 1;
         if (stalledPasses >= 3) {
-          setError(
-            `Stopped at ${done} of ${total}: the last three passes made no progress, so the rest can't be completed right now. ${failed > 0 ? `${failed} failed${firstError ? ` — first: ${firstError}` : ''}.` : ''}`
-          );
+          stopped = 'the last three passes made no progress';
           break;
         }
       }
@@ -507,9 +543,26 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
       // Win rates key off the +1d moves that just landed.
       if (kind === 'prices') await refreshAnalystsQuietly();
       await refresh();
-      setMessage(
-        `${fetched} fetched · ${cached} already cached · ${failed} failed${firstError ? ` — first error: ${firstError}` : ''}`
-      );
+
+      const calls = `${fetched} fetched · ${cached} already cached`;
+      const failures = failed > 0
+        ? ` · ${failed} failed${firstError ? ` — first: ${firstError}` : ''}`
+        : '';
+      if (stopped) {
+        // Never dress a stopped run up as a finished one: say where it got to
+        // and that clicking again picks up from there.
+        setError(
+          `Stopped at ${settled} of ${total} — ${stopped}. ${calls}${failures}. Progress is saved; click again to resume.`
+        );
+      } else if (kind === 'prices') {
+        // What the click was for is rows filled in, so lead with that; the
+        // ones already current are the difference between it and the total.
+        setMessage(
+          `${priced} of ${total} priced${priced < total - failed ? ` · ${total - failed - priced} already current` : ''} · ${calls}${failures}`
+        );
+      } else {
+        setMessage(`${calls}${failures}`);
+      }
     } catch {
       setError('Network error during enrichment.');
     } finally {

@@ -25,7 +25,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Malformed request.' }, { status: 400 });
   }
 
-  const batchSize = typeof body.batchSize === 'number' ? Math.min(body.batchSize, 100) : 40;
+  // Most ratings in a batch cost no API call at all — the day's minute bars and
+  // the month's daily bars are already cached by an earlier rating on the same
+  // name — so the batch is sized for the time budget below, not for the worst
+  // case. A small batch just means more round trips to get through the same
+  // work.
+  const batchSize =
+    typeof body.batchSize === 'number' ? Math.min(Math.max(body.batchSize, 1), 500) : 150;
   // Well inside maxDuration, so the handler returns a real answer rather than
   // being killed mid-batch and answering with a gateway error page.
   const budgetMs = 45_000;

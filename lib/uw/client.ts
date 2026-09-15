@@ -82,6 +82,37 @@ export class UwApiError extends Error {
   }
 }
 
+/**
+ * A shared pacer for every outbound UW call in this process.
+ *
+ * Enrichment runs several ratings at once and each one makes two or three
+ * calls, so without pacing a batch arrives as a burst, collects 429s, and the
+ * ratings that lost the race end up with no prices at all. UW does not publish
+ * a rate in its spec, so the gap adapts: it widens whenever a 429 comes back
+ * and narrows again while calls keep succeeding, settling near whatever the
+ * account actually allows.
+ */
+const MIN_GAP_MS = 90;
+const MAX_GAP_MS = 1500;
+let gapMs = 120;
+let nextSlotAt = 0;
+
+async function takeSlot(): Promise<void> {
+  const now = Date.now();
+  // Single-threaded, so claiming the slot and advancing the cursor is atomic.
+  const at = Math.max(now, nextSlotAt);
+  nextSlotAt = at + gapMs;
+  if (at > now) await new Promise((r) => setTimeout(r, at - now));
+}
+
+function easeOff(): void {
+  gapMs = Math.min(MAX_GAP_MS, Math.ceil(gapMs * 1.8));
+}
+
+function speedUp(): void {
+  if (gapMs > MIN_GAP_MS) gapMs = Math.max(MIN_GAP_MS, gapMs - 2);
+}
+
 export class UnusualWhalesClient {
   constructor(private readonly creds: UwCredentials) {}
 
@@ -105,29 +136,32 @@ export class UnusualWhalesClient {
       if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, String(v));
     }
 
-    let res = await fetch(url, {
-      headers: {
-        Accept: 'application/json',
-        Authorization: `Bearer ${this.creds.apiKey}`,
-      },
-      cache: 'no-store',
-    });
-
-    // Back off and retry a rate limit rather than failing the rating: honour
-    // Retry-After when it is sent, otherwise wait a beat.
-    for (let attempt = 0; attempt < 2 && res.status === 429; attempt++) {
-      const retryAfter = Number(res.headers.get('retry-after'));
-      const waitMs = Number.isFinite(retryAfter) && retryAfter > 0
-        ? Math.min(retryAfter * 1000, 5000)
-        : 1000 * (attempt + 1);
-      await new Promise((r) => setTimeout(r, waitMs));
-      res = await fetch(url, {
+    const send = async (): Promise<Response> => {
+      await takeSlot();
+      return fetch(url, {
         headers: {
           Accept: 'application/json',
           Authorization: `Bearer ${this.creds.apiKey}`,
         },
         cache: 'no-store',
       });
+    };
+
+    let res = await send();
+
+    // A rate limit or a 5xx says "not now", not "no" — six ratings enriching at
+    // once will hit both. Back off, slow the shared pacer so the rest of the
+    // batch stops walking into the same wall, and try again. Giving up here
+    // used to cost the rating its prices for good.
+    for (let attempt = 0; attempt < 4 && (res.status === 429 || res.status >= 500); attempt++) {
+      if (res.status === 429) easeOff();
+      const retryAfter = Number(res.headers.get('retry-after'));
+      const waitMs =
+        Number.isFinite(retryAfter) && retryAfter > 0
+          ? Math.min(retryAfter * 1000, 8000)
+          : Math.min(500 * 2 ** attempt, 4000);
+      await new Promise((r) => setTimeout(r, waitMs));
+      res = await send();
     }
 
     if (!res.ok) {
@@ -141,6 +175,7 @@ export class UnusualWhalesClient {
       );
     }
 
+    speedUp();
     return (await res.json()) as T;
   }
 
