@@ -78,6 +78,14 @@ the ticker, action, rating or date range re-filters the table you already have
 rather than requiring another pull; hit **Pull ratings** only when you want more
 data from the API.
 
+The date range, tickers, action and rating are also sent to `/api/research/rows`
+when the table loads. The table can only filter rows it has, so loading "the
+newest N" would leave a pull of older ratings sitting in the database, invisible
+— which reads as the pull having silently failed. The server applies a coarse
+window with a day of slack on each side and the client narrows it exactly in
+market time, so the two never disagree about a rating near midnight. When the
+row limit is hit the table says so instead of quietly dropping the rest.
+
 Dates are picked from a calendar popover (`components/ui/date-picker.tsx`) that
 works in plain `YYYY-MM-DD` strings, so no timezone shifts the day you clicked.
 

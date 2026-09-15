@@ -4,10 +4,31 @@ import { createAdminClient } from '@/lib/supabase/admin';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-/** Rows for the research table — the pulled ratings plus whatever enrichment exists. */
+const DEFAULT_LIMIT = 1000;
+const MAX_LIMIT = 2000;
+
+/**
+ * Rows for the research table.
+ *
+ * The date range matters here, not just in the browser: the table can only
+ * filter rows it has loaded, and loading "the newest N" means a pull of older
+ * ratings lands in the database but never reaches the page. The window is
+ * applied with a day of slack on each side and the exact market-time filtering
+ * is left to the client, so the two can't disagree about which day a rating
+ * near midnight belongs to.
+ */
 export async function GET(req: NextRequest) {
-  const runId = req.nextUrl.searchParams.get('runId');
-  const limit = Math.min(Number(req.nextUrl.searchParams.get('limit') ?? 500) || 500, 2000);
+  const params = req.nextUrl.searchParams;
+  const runId = params.get('runId');
+  const from = params.get('from');
+  const to = params.get('to');
+  const tickers = (params.get('tickers') ?? '')
+    .split(/[\s,]+/)
+    .map((t) => t.trim().toUpperCase())
+    .filter(Boolean);
+  const action = params.get('action');
+  const rating = params.get('rating');
+  const limit = Math.min(Number(params.get('limit') ?? DEFAULT_LIMIT) || DEFAULT_LIMIT, MAX_LIMIT);
 
   try {
     const supabase = createAdminClient();
@@ -21,7 +42,7 @@ export async function GET(req: NextRequest) {
         .limit(limit);
       if (error) throw new Error(error.message);
       keys = (data ?? []).map((r) => r.event_key as string);
-      if (keys.length === 0) return NextResponse.json({ rows: [] });
+      if (keys.length === 0) return NextResponse.json({ rows: [], truncated: false });
     }
 
     let q = supabase
@@ -29,14 +50,35 @@ export async function GET(req: NextRequest) {
       .select('*')
       .order('rated_at', { ascending: false })
       .limit(limit);
+
     if (keys) q = q.in('event_key', keys);
+    if (from) q = q.gte('rated_at', `${from}T00:00:00Z`);
+    if (to) {
+      // One day of slack: a rating at 23:30 ET on the `to` date is already the
+      // next day in UTC, and the client decides the exact boundary.
+      const end = new Date(`${to}T00:00:00Z`);
+      end.setUTCDate(end.getUTCDate() + 2);
+      q = q.lt('rated_at', end.toISOString());
+    }
+    if (tickers.length > 0) q = q.in('ticker', tickers);
+    if (action) q = q.eq('action', action);
+    if (rating) q = q.eq('recommendation', rating);
 
     const { data, error } = await q;
     if (error) throw new Error(error.message);
-    return NextResponse.json({ rows: data ?? [] });
+
+    const rows = data ?? [];
+    return NextResponse.json({ rows, truncated: rows.length >= limit });
   } catch (e) {
+    const message = e instanceof Error ? e.message : 'Could not load rows.';
+    const timedOut = /statement timeout|canceling statement/i.test(message);
     return NextResponse.json(
-      { rows: [], error: e instanceof Error ? e.message : 'Could not load rows.' },
+      {
+        rows: [],
+        error: timedOut
+          ? 'The database was too busy to return the table. Try again in a moment.'
+          : message,
+      },
       { status: 502 }
     );
   }

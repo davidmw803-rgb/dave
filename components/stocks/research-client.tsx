@@ -139,6 +139,7 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
   const [progress, setProgress] = useState<Progress>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [stale, setStale] = useState(false);
+  const [truncated, setTruncated] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Tier 1 — sent to Unusual Whales
@@ -249,16 +250,28 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
    * Now it retries, and says so when it can't.
    */
   const refresh = useCallback(async (runId?: string): Promise<boolean> => {
-    const qs = runId ? `?runId=${encodeURIComponent(runId)}` : '';
+    // Send the pull filters along: the table can only filter rows it has, so
+    // asking for "the newest N" would hide anything older that was just pulled.
+    const params = new URLSearchParams();
+    if (runId) params.set('runId', runId);
+    if (newerThan) params.set('from', newerThan);
+    if (olderThan) params.set('to', olderThan);
+    if (tickers.trim()) params.set('tickers', tickers);
+    if (action) params.set('action', action);
+    if (recommendation) params.set('rating', recommendation);
+    const qs = params.toString() ? `?${params.toString()}` : '';
 
     for (let attempt = 0; attempt < 3; attempt++) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
       try {
         const res = await fetch(`/api/research/rows${qs}`, { signal: controller.signal });
-        const body = (await res.json().catch(() => null)) as { rows?: unknown } | null;
+        const body = (await res.json().catch(() => null)) as
+          | { rows?: unknown; truncated?: boolean }
+          | null;
         if (res.ok && body && Array.isArray(body.rows)) {
           setRows(body.rows as ResearchRow[]);
+          setTruncated(body.truncated === true);
           setStale(false);
           return true;
         }
@@ -272,7 +285,7 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
 
     setStale(true);
     return false;
-  }, []);
+  }, [newerThan, olderThan, tickers, action, recommendation]);
 
   const pull = async () => {
     setBusy('pull');
@@ -608,6 +621,12 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
       {error ? (
         <div className="rounded border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-300">
           {error}
+        </div>
+      ) : null}
+      {truncated ? (
+        <div className="rounded border border-neutral-800 bg-neutral-900/60 p-3 text-xs text-neutral-400">
+          Showing the newest {rows.length.toLocaleString()} matching ratings — there are
+          more in the database. Narrow the date range to reach older ones.
         </div>
       ) : null}
       {stale ? (
