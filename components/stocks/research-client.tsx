@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Table,
   TableBody,
@@ -351,6 +351,35 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
     setProgress(null);
     return true;
   }, [newerThan, olderThan, tickers, action, recommendation]);
+
+  /**
+   * Reload when a server-side filter changes.
+   *
+   * Date range, tickers, action and rating decide which rows the server sends;
+   * the rest are applied to what is already loaded. Without this the page kept
+   * filtering whatever it fetched at startup — set a July range against a table
+   * holding September and every row is correctly excluded, which looks exactly
+   * like the pull having failed.
+   */
+  const lastLoaded = useRef<string | null>(null);
+  useEffect(() => {
+    const signature = JSON.stringify([newerThan, olderThan, tickers, action, recommendation]);
+    // The first render already has server-rendered rows for the empty filter
+    // set, and re-running for an unchanged signature would refetch the same
+    // rows twice.
+    if (lastLoaded.current === null) {
+      lastLoaded.current = signature;
+      return;
+    }
+    if (lastLoaded.current === signature) return;
+
+    const timer = setTimeout(() => {
+      lastLoaded.current = signature;
+      void refresh();
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [newerThan, olderThan, tickers, action, recommendation, refresh]);
+
 
   const pull = async () => {
     setBusy('pull');
