@@ -297,13 +297,26 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
     const MAX_PAGES = 1000;
     const collected: ResearchRow[] = [];
 
+    // Where the last page ended, rather than how many rows to skip. Skipping
+    // makes each page re-walk every row before it, which is what made the last
+    // pages of a full load time out.
+    let cursor: { ratedAt: string; eventKey: string } | null = null;
+    let total: number | null = null;
+
     for (let pageIndex = 0; pageIndex < MAX_PAGES; pageIndex++) {
-      const offset = pageIndex * PAGE;
       const params = new URLSearchParams(base);
       params.set('limit', String(PAGE));
-      params.set('offset', String(offset));
+      if (cursor) {
+        params.set('cursorRatedAt', cursor.ratedAt);
+        params.set('cursorEventKey', cursor.eventKey);
+      }
 
-      type RowsPage = { rows?: unknown; total?: number; hasMore?: boolean };
+      type RowsPage = {
+        rows?: unknown;
+        total?: number | null;
+        hasMore?: boolean;
+        nextCursor?: { ratedAt: string; eventKey: string } | null;
+      };
       let page: RowsPage | null = null;
 
       for (let attempt = 0; attempt < 3 && !page; attempt++) {
@@ -338,12 +351,17 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
       }
 
       collected.push(...(page.rows as ResearchRow[]));
-      if (collected.length > PAGE) setProgress({
-        label: 'Loading ratings',
-        done: collected.length,
-        total: page.total ?? collected.length,
-      });
-      if (!page.hasMore) break;
+      if (page.total !== null && page.total !== undefined) total = page.total;
+      if (collected.length > PAGE) {
+        setProgress({
+          label: 'Loading ratings',
+          done: collected.length,
+          total: total ?? collected.length,
+        });
+      }
+
+      if (!page.hasMore || !page.nextCursor) break;
+      cursor = page.nextCursor;
     }
 
     setRows(collected);
