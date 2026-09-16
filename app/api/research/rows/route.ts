@@ -12,6 +12,13 @@ const MAX_LIMIT = 5000;
 /**
  * Rows for the research table.
  *
+ * Paged by CURSOR, not offset. The client loads every matching row by asking
+ * for successive pages, and with OFFSET each page re-walks everything before
+ * it — the last page of eighteen produced 18,000 rows to return 1,000, and a
+ * cold cache turned that into a statement timeout. A cursor on
+ * (rated_at, event_key) makes every page an index seek, so the last costs what
+ * the first costs.
+ *
  * The date range matters here, not just in the browser: the table can only
  * filter rows it has loaded, and loading "the newest N" means a pull of older
  * ratings lands in the database but never reaches the page. The window is
@@ -31,59 +38,82 @@ export async function GET(req: NextRequest) {
   const action = params.get('action');
   const rating = params.get('rating');
   const limit = Math.min(Number(params.get('limit') ?? DEFAULT_LIMIT) || DEFAULT_LIMIT, MAX_LIMIT);
-  const offset = Math.max(0, Number(params.get('offset') ?? 0) || 0);
+  const cursorRatedAt = params.get('cursorRatedAt');
+  const cursorEventKey = params.get('cursorEventKey');
 
   try {
     const supabase = createAdminClient();
 
     let keys: string[] | null = null;
     if (runId) {
-      const { data, error } = await supabase
-        .from('uw_pull_run_events')
-        .select('event_key')
-        .eq('run_id', runId)
-        .limit(limit);
-      if (error) throw new Error(error.message);
-      keys = (data ?? []).map((r) => r.event_key as string);
+      // Every key in the run, not the first page of them: a run can hold more
+      // rows than one response returns.
+      keys = [];
+      for (let offset = 0; ; offset += 1000) {
+        const { data, error } = await supabase
+          .from('uw_pull_run_events')
+          .select('event_key')
+          .eq('run_id', runId)
+          .range(offset, offset + 999);
+        if (error) throw new Error(error.message);
+        const batch = (data ?? []).map((r) => r.event_key as string);
+        keys.push(...batch);
+        if (batch.length < 1000) break;
+      }
       if (keys.length === 0) {
-        return NextResponse.json({ rows: [], total: 0, offset, hasMore: false });
+        return NextResponse.json({ rows: [], total: 0, hasMore: false, nextCursor: null });
       }
     }
 
-    let q = supabase
-      .from('uw_research_rows')
-      // An exact count lets the client fetch the remaining pages without
-      // guessing, and lets the table say how many matches exist in total.
-      .select('*', { count: 'exact' })
-      .order('rated_at', { ascending: false })
-      // A stable tiebreak: two ratings can share a timestamp, and without it
-      // paging by offset can repeat or skip one.
-      .order('event_key', { ascending: true })
-      .range(offset, offset + limit - 1);
-
-    if (keys) q = q.in('event_key', keys);
-    if (from) q = q.gte('rated_at', `${from}T00:00:00Z`);
+    // One day of slack past `to`: a rating at 23:30 ET on that date is already
+    // the next day in UTC, and the client decides the exact boundary.
+    let toExclusive: string | null = null;
     if (to) {
-      // One day of slack: a rating at 23:30 ET on the `to` date is already the
-      // next day in UTC, and the client decides the exact boundary.
       const end = new Date(`${to}T00:00:00Z`);
       end.setUTCDate(end.getUTCDate() + 2);
-      q = q.lt('rated_at', end.toISOString());
+      toExclusive = end.toISOString();
     }
-    if (tickers.length > 0) q = q.in('ticker', tickers);
-    if (action) q = q.eq('action', action);
-    if (rating) q = q.eq('recommendation', rating);
 
-    const { data, error, count } = await q;
+    const filters = {
+      p_from: from ? `${from}T00:00:00Z` : null,
+      p_to: toExclusive,
+      p_tickers: tickers.length > 0 ? tickers : null,
+      p_action: action || null,
+      p_rating: rating || null,
+      p_event_keys: keys,
+    };
+
+    const { data, error } = await supabase.rpc('research_rows_page', {
+      ...filters,
+      p_cursor_rated_at: cursorRatedAt,
+      p_cursor_event_key: cursorEventKey,
+      p_limit: limit,
+    });
     if (error) throw new Error(error.message);
 
-    const rows = data ?? [];
-    const total = count ?? rows.length;
+    const rows = (data ?? []) as { rated_at: string; event_key: string }[];
+
+    // The total is for the progress line and changes only when the filters do,
+    // so it is counted once for the first page rather than on every one of
+    // them. It also counts the ratings table directly — every filter lives
+    // there, so it needs none of the view's joins.
+    let total: number | null = null;
+    if (!cursorRatedAt) {
+      const { data: count, error: countError } = await supabase.rpc(
+        'research_rows_count',
+        filters
+      );
+      if (countError) throw new Error(countError.message);
+      total = Number(count ?? 0);
+    }
+
+    const last = rows.length > 0 ? rows[rows.length - 1] : null;
     return NextResponse.json({
       rows,
       total,
-      offset,
-      hasMore: offset + rows.length < total,
+      // A short page is the end of the results; a full one might not be.
+      hasMore: rows.length === limit,
+      nextCursor: last ? { ratedAt: last.rated_at, eventKey: last.event_key } : null,
     });
   } catch (e) {
     const message = e instanceof Error ? e.message : 'Could not load rows.';
