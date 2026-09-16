@@ -400,7 +400,6 @@ export async function enrichPrices(
     event_key: string;
     ticker: string;
     rated_at: string;
-    outstanding_total: number;
   }
 
   // `force` re-prices rows that are already current, so it cannot use the
@@ -414,19 +413,24 @@ export async function enrichPrices(
       .select('event_key, ticker, rated_at')
       .in('event_key', keys);
     if (error) throw new Error(error.message);
-    batch = ((data ?? []) as Omit<EventRow, 'outstanding_total'>[]).map((e) => ({
-      ...e,
-      outstanding_total: eventKeys.length,
-    }));
+    batch = (data ?? []) as EventRow[];
     outstanding = eventKeys.length;
   } else {
-    const { data, error } = await supabase.rpc('research_outstanding_events', {
-      p_keys: eventKeys,
-      p_limit: batchSize,
-    });
-    if (error) throw new Error(error.message);
-    batch = (data ?? []) as EventRow[];
-    outstanding = batch.length > 0 ? Number(batch[0].outstanding_total) : 0;
+    // Two queries rather than one carrying the total on every row: the
+    // correlated count made the batch query materialise every outstanding
+    // rating before the limit could take a slice of it, which cost ten seconds
+    // of a forty-five second pass before any price was fetched.
+    const [batchResult, countResult] = await Promise.all([
+      supabase.rpc('research_outstanding_events', {
+        p_keys: eventKeys,
+        p_limit: batchSize,
+      }),
+      supabase.rpc('research_outstanding_count', { p_keys: eventKeys }),
+    ]);
+    if (batchResult.error) throw new Error(batchResult.error.message);
+    if (countResult.error) throw new Error(countResult.error.message);
+    batch = (batchResult.data ?? []) as EventRow[];
+    outstanding = Number(countResult.data ?? 0);
   }
 
   const counters = { fetched: 0, cached: 0 };
