@@ -41,6 +41,13 @@ export async function getOrFetch<T>(
     ttlMs: number | null;
     /** Skip the cache read and refetch. The write still happens. */
     force?: boolean;
+    /**
+     * Whether a successful response is worth remembering. An upstream that
+     * answers 200 with nothing in it is making a statement about right now,
+     * not about the data — caching that turns a moment of upstream trouble
+     * into a permanently empty column.
+     */
+    cacheIf?: (value: T) => boolean;
   },
   fetcher: () => Promise<T>
 ): Promise<CachedCall<T>> {
@@ -63,6 +70,7 @@ export async function getOrFetch<T>(
 
   try {
     const value = await fetcher();
+    if (opts.cacheIf && !opts.cacheIf(value)) return { value, cached: false };
     await supabase.from('api_call_cache').upsert(
       {
         call_key: key,

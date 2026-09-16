@@ -240,6 +240,8 @@ async function enrichEventWindows(
       args: { ticker: event.ticker, date: day, limit: 2500 },
       // A past session's bars never change.
       ttlMs: TTL.settled,
+      // ...but "no bars at all" is not a past session's bars. Never settle it.
+      cacheIf: (bars) => bars.length > 0,
     },
     () => client.ohlc(event.ticker, '1m', { date: day, limit: 2500 })
   );
@@ -265,6 +267,7 @@ async function enrichEventWindows(
       args: { ticker: event.ticker, end_date: dailyEnd, timeframe: '6M' },
       // Trailing daily bars keep arriving, so this one ages out.
       ttlMs: TTL.info,
+      cacheIf: (bars) => bars.length > 0,
     },
     () =>
       client.ohlc(event.ticker, '1d', {
@@ -287,6 +290,20 @@ async function enrichEventWindows(
   if (!t0) {
     throw new Error(
       `no price at ${event.rated_at} — ${minuteBars.value.length} minute bars, ${daily.length} daily bars`
+    );
+  }
+
+  /**
+   * Same rule for the day windows. UW answered a burst of daily requests with
+   * an empty series rather than an error, and because t0 had come off the
+   * minute feed the rating was written and stamped as done with every one of
+   * +1d..+30d blank — 1,549 ratings frozen that way, none of which would ever
+   * be looked at again. An empty daily series is an upstream hiccup, not a
+   * ticker with no history.
+   */
+  if (ratedMs + 24 * 3600_000 <= Date.now() && daily.length === 0) {
+    throw new Error(
+      `no daily bars for ${event.ticker} (${monthKey}) — day windows would all be blank`
     );
   }
 
