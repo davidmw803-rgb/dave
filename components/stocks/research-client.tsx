@@ -132,6 +132,23 @@ function actionVariant(action: string | null) {
   return 'neutral' as const;
 }
 
+/**
+ * The server-side filters, as one comparable value. These five decide which
+ * rows the server sends; everything else narrows what is already loaded.
+ */
+function filterSignature(
+  newerThan: string,
+  olderThan: string,
+  tickers: string,
+  action: string,
+  recommendation: string
+): string {
+  return JSON.stringify([newerThan, olderThan, tickers, action, recommendation]);
+}
+
+/** What the server-rendered rows were fetched for: no filters at all. */
+const SERVER_SIGNATURE = filterSignature('', '', '', '', '');
+
 export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) {
   const [rows, setRows] = useState<ResearchRow[]>(initialRows);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -140,6 +157,16 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
   const [message, setMessage] = useState<string | null>(null);
   const [stale, setStale] = useState(false);
   const [truncated, setTruncated] = useState(false);
+  const [loading, setLoading] = useState(false);
+  /**
+   * Which server-side filters the rows in hand were fetched for. The page is
+   * server-rendered with the newest few hundred ratings and no filters at all,
+   * so the moment a date range is set those rows are the wrong rows — and
+   * because the client filter then excludes every one of them the table empties
+   * out and reads as "there is nothing here" rather than "this is not loaded
+   * yet". Comparing signatures is what lets the table say which it is.
+   */
+  const [rowsSignature, setRowsSignature] = useState(SERVER_SIGNATURE);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(300);
   const [error, setError] = useState<string | null>(null);
@@ -239,6 +266,12 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
     timeTo,
   ]);
 
+  // The rows in hand answer the filters on screen only if they were fetched
+  // for them. Until then the table must not present them, filtered or not, as
+  // the result — that is what turned a failed reload into "No ratings yet".
+  const rowsMatchFilters =
+    rowsSignature === filterSignature(newerThan, olderThan, tickers, action, recommendation);
+
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const currentPage = Math.min(page, totalPages);
   const pageRows = useMemo(
@@ -302,6 +335,8 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
     // pages of a full load time out.
     let cursor: { ratedAt: string; eventKey: string } | null = null;
     let total: number | null = null;
+    const signature = filterSignature(newerThan, olderThan, tickers, action, recommendation);
+    setLoading(true);
 
     for (let pageIndex = 0; pageIndex < MAX_PAGES; pageIndex++) {
       const params = new URLSearchParams(base);
@@ -342,11 +377,17 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
         // Keep whatever pages did arrive rather than throwing the lot away.
         if (collected.length > 0) {
           setRows(collected);
+          setRowsSignature(signature);
           setTruncated(true);
           setStale(false);
+          setLoading(false);
           return true;
         }
+        // Nothing arrived, so the rows still in hand belong to whatever was
+        // asked for last time. Leave the signature alone — that mismatch is
+        // what stops the table presenting them as the answer to this filter.
         setStale(true);
+        setLoading(false);
         return false;
       }
 
@@ -365,8 +406,10 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
     }
 
     setRows(collected);
+    setRowsSignature(signature);
     setTruncated(false);
     setStale(false);
+    setLoading(false);
     setProgress(null);
     return true;
   }, [newerThan, olderThan, tickers, action, recommendation]);
@@ -731,7 +774,11 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
           <h1 className="text-xl font-semibold">Analyst rating research</h1>
           <p className="text-xs text-neutral-500">
             Pull ratings from Unusual Whales, then enrich the rows you care about ·{' '}
-            {filtered.length.toLocaleString()} of {rows.length.toLocaleString()} rows
+            {rowsMatchFilters
+              ? `${filtered.length.toLocaleString()} of ${rows.length.toLocaleString()} rows`
+              : loading
+                ? 'loading…'
+                : 'not loaded for these filters'}
             {selected.size > 0 ? ` · ${selected.size} selected` : ''}
           </p>
         </div>
@@ -1147,7 +1194,29 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
               {pageRows.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={30} className="py-8 text-center text-xs text-neutral-500">
-                    No ratings yet. Set your filters and hit <strong>Pull ratings</strong>.
+                    {loading ? (
+                      'Loading ratings for these filters…'
+                    ) : !rowsMatchFilters ? (
+                      <>
+                        These filters haven&apos;t been loaded.{' '}
+                        <button
+                          type="button"
+                          onClick={() => void refresh()}
+                          className="underline underline-offset-2 hover:text-neutral-300"
+                        >
+                          Load them
+                        </button>
+                        {rows.length > 0
+                          ? ` — the ${rows.length.toLocaleString()} rows in the table are from a different filter.`
+                          : '.'}
+                      </>
+                    ) : rows.length > 0 ? (
+                      `No rows match these filters — ${rows.length.toLocaleString()} loaded for this date range.`
+                    ) : (
+                      <>
+                        No ratings yet. Set your filters and hit <strong>Pull ratings</strong>.
+                      </>
+                    )}
                   </TableCell>
                 </TableRow>
               ) : (
