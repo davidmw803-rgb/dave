@@ -1,6 +1,7 @@
 import 'server-only';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { UnusualWhalesClient, type OhlcBarRaw } from '@/lib/uw/client';
+import { benchmarkFor } from './benchmarks';
 import { TTL, callKey, getOrFetch } from './cache';
 import type { EnrichResult } from './types';
 
@@ -217,7 +218,7 @@ async function enrichTickerInfo(
 
 async function enrichEventWindows(
   client: UnusualWhalesClient,
-  event: { event_key: string; ticker: string; rated_at: string },
+  event: { event_key: string; ticker: string; rated_at: string; sector: string | null },
   counters: { fetched: number; cached: number }
 ): Promise<void> {
   const ratedAt = new Date(event.rated_at);
@@ -279,6 +280,42 @@ async function enrichEventWindows(
   dailyBars.cached ? counters.cached++ : counters.fetched++;
 
   const daily = oneBarPerDate(dailyBars.value);
+
+  /**
+   * The benchmark's daily series, keyed exactly like the stock's — so all
+   * ~4,600 priced ratings in a month share one call per fund. Twelve ETFs over
+   * five months is sixty requests for the whole table, which is why this can be
+   * backfilled without touching the rate limiter.
+   */
+  const benchTicker = benchmarkFor(event.sector);
+  let benchDaily: OhlcBarRaw[] = [];
+  try {
+    const benchBars = await getOrFetch<OhlcBarRaw[]>(
+      callKey('uw', 'ohlc', benchTicker, '1d', monthKey),
+      {
+        provider: 'uw',
+        endpoint: '/api/stock/{ticker}/ohlc/1d',
+        args: { ticker: benchTicker, end_date: dailyEnd, timeframe: '6M' },
+        ttlMs: TTL.info,
+        cacheIf: (bars) => bars.length > 0,
+      },
+      () =>
+        client.ohlc(benchTicker, '1d', {
+          end_date: dailyEnd,
+          timeframe: '6M',
+          limit: 2500,
+        })
+    );
+    benchBars.cached ? counters.cached++ : counters.fetched++;
+    benchDaily = oneBarPerDate(benchBars.value);
+  } catch {
+    // The benchmark is an addition, not a prerequisite. If the ETF series
+    // can't be had, the rating still gets its own prices and the adjusted
+    // columns stay empty — far better than failing the rating and blocking
+    // the whole pipeline behind an index fund.
+    benchDaily = [];
+  }
+
   const t0 = priceAt(minuteBars.value, ratedMs) ?? priceAt(daily, ratedMs);
 
   // No anchor price means no row is worth writing, and — more to the point —
@@ -315,7 +352,33 @@ async function enrichEventWindows(
     price: number | null;
     bar_at: string | null;
     pct_from_t0: number | null;
+    bench_pct: number | null;
+    abn_pct: number | null;
   }
+
+  /**
+   * The anchors for the sector adjustment: the last daily close at or before
+   * the rating, for the stock and for its benchmark. Both legs are measured
+   * close-to-close from here, which is the only way the difference means
+   * anything — the ETF has no intraday bar to match `t0` against, so
+   * `abn_pct` is deliberately NOT `pct_from_t0` minus `bench_pct`.
+   */
+  const stockAnchor = priceAt(daily, ratedMs);
+  const benchAnchor = priceAt(benchDaily, ratedMs);
+
+  const adjusted = (
+    targetDate: string
+  ): { bench: number | null; abn: number | null } => {
+    if (!stockAnchor || !benchAnchor || stockAnchor.price <= 0 || benchAnchor.price <= 0) {
+      return { bench: null, abn: null };
+    }
+    const stockAt = closeOnOrBefore(daily, targetDate);
+    const benchAt = closeOnOrBefore(benchDaily, targetDate);
+    if (!stockAt || !benchAt) return { bench: null, abn: null };
+    const benchPct = ((benchAt.price - benchAnchor.price) / benchAnchor.price) * 100;
+    const stockPct = ((stockAt.price - stockAnchor.price) / stockAnchor.price) * 100;
+    return { bench: benchPct, abn: stockPct - benchPct };
+  };
 
   const rows: WindowRow[] = [
     {
@@ -324,6 +387,8 @@ async function enrichEventWindows(
       price: t0.price,
       bar_at: t0.barAt,
       pct_from_t0: 0,
+      bench_pct: 0,
+      abn_pct: 0,
     },
   ];
 
@@ -334,7 +399,11 @@ async function enrichEventWindows(
    * leaves the window permanently outstanding, so the enrichment loop keeps
    * picking the rating up and never finishes.
    */
-  const push = (label: string, hit: { price: number; barAt: string } | null) => {
+  const push = (
+    label: string,
+    hit: { price: number; barAt: string } | null,
+    adj: { bench: number | null; abn: number | null } = { bench: null, abn: null }
+  ) => {
     rows.push({
       event_key: event.event_key,
       window_label: label,
@@ -342,6 +411,8 @@ async function enrichEventWindows(
       bar_at: hit?.barAt ?? null,
       pct_from_t0:
         hit && t0.price > 0 ? ((hit.price - t0.price) / t0.price) * 100 : null,
+      bench_pct: adj.bench,
+      abn_pct: adj.abn,
     });
   };
 
@@ -356,13 +427,14 @@ async function enrichEventWindows(
   // bar — not the last post-market print, which is what the minute feed ends on.
   const ratedDate = ratedAt.toISOString().slice(0, 10);
   if (ratedMs + 24 * 3600_000 <= now) {
-    push('eod', closeOnOrBefore(daily, ratedDate));
+    push('eod', closeOnOrBefore(daily, ratedDate), adjusted(ratedDate));
   }
 
   for (const w of DAY_WINDOWS) {
     const at = ratedMs + w.days * 24 * 3600_000;
     if (at > now) continue;
-    push(w.label, closeOnOrBefore(daily, addDays(ratedDate, w.days)));
+    const at_ = addDays(ratedDate, w.days);
+    push(w.label, closeOnOrBefore(daily, at_), adjusted(at_));
   }
 
   const supabase = createAdminClient();
@@ -380,6 +452,7 @@ async function enrichEventWindows(
     .update({
       windows_pulled_at: new Date().toISOString(),
       price_t0: t0.price,
+      bench_ticker: benchTicker,
     })
     .eq('event_key', event.event_key);
   if (stampError) throw new Error(stampError.message);
@@ -417,6 +490,7 @@ export async function enrichPrices(
     event_key: string;
     ticker: string;
     rated_at: string;
+    sector: string | null;
   }
 
   // `force` re-prices rows that are already current, so it cannot use the
@@ -427,7 +501,7 @@ export async function enrichPrices(
     const keys = eventKeys.slice(0, batchSize);
     const { data, error } = await supabase
       .from('uw_analyst_ratings')
-      .select('event_key, ticker, rated_at')
+      .select('event_key, ticker, rated_at, sector')
       .in('event_key', keys);
     if (error) throw new Error(error.message);
     batch = (data ?? []) as EventRow[];
@@ -516,7 +590,12 @@ export async function enrichPrices(
       try {
         await enrichEventWindows(
           client,
-          { event_key: e.event_key, ticker: e.ticker, rated_at: e.rated_at },
+          {
+            event_key: e.event_key,
+            ticker: e.ticker,
+            rated_at: e.rated_at,
+            sector: e.sector,
+          },
           counters
         );
         processedKeys.push(e.event_key);
