@@ -65,11 +65,29 @@ export const DAY_WINDOWS = Array.from(
 /** Every window we measure around a rating, in table order. */
 export const MOVE_WINDOWS: readonly string[] = [...INTRADAY_WINDOWS, ...DAY_WINDOWS];
 
+/**
+ * The windows that carry a sector adjustment: end-of-day and every calendar
+ * day after it. The intraday windows do not — a minute of market drift is
+ * noise, and matching it would cost an ETF minute-bar call per fund per
+ * session for no measurable gain.
+ */
+export const ADJUSTED_WINDOWS: readonly string[] = ['eod', ...DAY_WINDOWS];
+
 export type MoveWindow = string;
 
 export interface MoveCell {
   price: number | null;
+  /** Move from the price at the rating. Raw — no market adjustment. */
   pct: number | null;
+  /** The sector ETF's move over the same interval, close-to-close. */
+  bench?: number | null;
+  /**
+   * Stock minus benchmark, both close-to-close from the session at or before
+   * the rating. Not `pct - bench`: the benchmark has no intraday anchor, so
+   * the two legs have to share a close-to-close basis to be comparable.
+   * Daily windows only — a minute of market drift is noise.
+   */
+  abn?: number | null;
 }
 
 /** A row of the research table, as `uw_research_rows` returns it. */
@@ -91,6 +109,7 @@ export interface ResearchRow {
   price_at_rating: number | null;
   current_price: number | null;
   current_price_at: string | null;
+  bench_ticker: string | null;
   upside_pct: number | null;
   move_since_rating_pct: number | null;
   moves: Record<string, MoveCell | undefined> | null;

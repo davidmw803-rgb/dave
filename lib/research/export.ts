@@ -1,4 +1,4 @@
-import { MOVE_WINDOWS, type ResearchRow } from './types';
+import { ADJUSTED_WINDOWS, MOVE_WINDOWS, type ResearchRow } from './types';
 import { hhmmToMinutes, marketMoment } from './market-time';
 
 /**
@@ -111,6 +111,7 @@ function buildColumns(): Column[] {
     { header: 'move_since_rating_pct', value: (r) => numCell(r.move_since_rating_pct) },
     { header: 'market_cap', value: (r) => numCell(r.marketcap) },
     { header: 'next_earnings_date', value: (r) => textCell(r.next_earnings_date) },
+    { header: 'benchmark', value: (r) => textCell(r.bench_ticker) },
   ];
 
   // One column per window: the percentage move from the price at the rating.
@@ -119,6 +120,28 @@ function buildColumns(): Column[] {
     columns.push({
       header: `move_${key}_pct`,
       value: (r) => numCell(r.moves?.[w]?.pct),
+    });
+  }
+
+  /**
+   * The same windows again, sector-adjusted. These are the ones worth
+   * regressing on: a raw move is graded against whatever the market did that
+   * week, so two ratings a month apart are not comparable until the benchmark
+   * is taken out. Daily windows only — the intraday columns have no benchmark
+   * and are left out rather than exported as blanks.
+   */
+  for (const w of ADJUSTED_WINDOWS) {
+    const key = w.replace('t+', '');
+    columns.push({
+      header: `abn_${key}_pct`,
+      value: (r) => numCell(r.moves?.[w]?.abn),
+    });
+  }
+  for (const w of ADJUSTED_WINDOWS) {
+    const key = w.replace('t+', '');
+    columns.push({
+      header: `bench_${key}_pct`,
+      value: (r) => numCell(r.moves?.[w]?.bench),
     });
   }
 

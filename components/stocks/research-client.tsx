@@ -17,6 +17,7 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import {
+  ADJUSTED_WINDOWS,
   MOVE_WINDOWS,
   RATING_ACTIONS,
   RECOMMENDATIONS,
@@ -169,6 +170,12 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
   const [rowsSignature, setRowsSignature] = useState(SERVER_SIGNATURE);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(300);
+  /**
+   * Whether the move columns show the raw move or the sector-adjusted one.
+   * Raw is what happened; adjusted is what was specific to the name. Two
+   * ratings a month apart are only comparable adjusted.
+   */
+  const [moveBasis, setMoveBasis] = useState<'raw' | 'abn'>('raw');
   const [error, setError] = useState<string | null>(null);
 
   // Tier 1 — sent to Unusual Whales
@@ -1146,6 +1153,31 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
               Clear all filters
             </Button>
           </div>
+
+          <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-neutral-900 pt-4">
+            <span className="text-[11px] uppercase tracking-wide text-neutral-500">
+              Move columns
+            </span>
+            <Button
+              variant={moveBasis === 'raw' ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => setMoveBasis('raw')}
+            >
+              Raw
+            </Button>
+            <Button
+              variant={moveBasis === 'abn' ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => setMoveBasis('abn')}
+            >
+              Sector-adjusted
+            </Button>
+            <span className="text-xs text-neutral-500">
+              {moveBasis === 'abn'
+                ? 'Move minus the sector ETF over the same days — what was specific to the name. Intraday columns are unadjusted (dimmed).'
+                : 'The raw move. Two ratings from different weeks were graded against different markets.'}
+            </span>
+          </div>
         </CardContent>
       </Card>
 
@@ -1281,13 +1313,30 @@ export function ResearchClient({ initialRows, loadError, uwConfigured }: Props) 
                     </TableCell>
                     {MOVE_WINDOWS.map((w) => {
                       const cell = r.moves?.[w];
-                      const pct = num(cell?.pct);
+                      const raw = num(cell?.pct);
+                      const abn = num(cell?.abn);
+                      const bench = num(cell?.bench);
+                      // Intraday windows carry no benchmark, so they keep
+                      // showing the raw move rather than going blank when the
+                      // table is switched to adjusted.
+                      const adjustable = ADJUSTED_WINDOWS.includes(w);
+                      const pct = moveBasis === 'abn' && adjustable ? abn : raw;
                       const cellPrice = num(cell?.price);
+                      const title = [
+                        cellPrice !== null ? `${fmtPrice(cellPrice)} at ${w}` : null,
+                        raw !== null ? `raw ${fmtPct(raw)}` : null,
+                        bench !== null ? `${r.bench_ticker ?? 'benchmark'} ${fmtPct(bench)}` : null,
+                        abn !== null ? `adjusted ${fmtPct(abn)}` : null,
+                      ]
+                        .filter(Boolean)
+                        .join(' · ');
                       return (
                         <TableCell
                           key={w}
-                          className={`text-right font-mono tabular-nums ${signColor(pct)}`}
-                          title={cellPrice !== null ? `${fmtPrice(cellPrice)} at ${w}` : undefined}
+                          className={`text-right font-mono tabular-nums ${signColor(pct)}${
+                            moveBasis === 'abn' && !adjustable ? ' opacity-50' : ''
+                          }`}
+                          title={title || undefined}
                         >
                           {fmtPct(pct)}
                         </TableCell>
