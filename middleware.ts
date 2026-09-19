@@ -7,10 +7,11 @@ import {
 } from '@/lib/auth/session';
 
 export const config = {
-  // Everything except Next internals, the login endpoints, and the
-  // self-gated static ops page in public/.
+  // Everything except Next internals, the login endpoints, the self-gated
+  // static ops page in public/, and the MCP endpoint — which carries its own
+  // bearer token because an MCP client has no session cookie to present.
   matcher: [
-    '/((?!_next/|favicon.ico|robots.txt|dashboard.html|login|api/auth/).*)',
+    '/((?!_next/|favicon.ico|robots.txt|dashboard.html|login|api/auth/|api/mcp).*)',
   ],
 };
 

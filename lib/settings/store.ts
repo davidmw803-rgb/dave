@@ -6,7 +6,8 @@ export type SettingKey =
   | 'uw_api_key'
   | 'uw_api_base_url'
   | 'tipranks_api_key'
-  | 'tipranks_api_base_url';
+  | 'tipranks_api_base_url'
+  | 'mcp_token';
 
 export interface SettingDefinition {
   key: SettingKey;
@@ -44,6 +45,15 @@ export const SETTING_DEFS: SettingDefinition[] = [
     secret: true,
     placeholder: 'tr_…',
     envVar: 'TIPRANKS_API_KEY',
+  },
+  {
+    key: 'mcp_token',
+    label: 'MCP access token',
+    description:
+      'Lets Claude run pulls and query this data through /api/mcp. Its own secret, revocable on its own — not the dashboard password.',
+    secret: true,
+    placeholder: 'a long random string',
+    envVar: 'MCP_TOKEN',
   },
   {
     key: 'tipranks_api_base_url',
