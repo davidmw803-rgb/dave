@@ -50,8 +50,10 @@ export const SETTING_DEFS: SettingDefinition[] = [
     key: 'mcp_token',
     label: 'MCP access token',
     description:
-      'Lets Claude run pulls and query this data through /api/mcp. Its own secret, revocable on its own — not the dashboard password.',
-    secret: true,
+      'Lets Claude run pulls and query this data through /api/mcp. Its own secret, revocable on its own — not the dashboard password. Stored hashed, so it can never be read back: save a new one to rotate.',
+    // Hashed on the way in, like the dashboard password, so what lands in the
+    // database is not the token and there is nothing to decrypt.
+    secret: false,
     placeholder: 'a long random string',
     envVar: 'MCP_TOKEN',
   },

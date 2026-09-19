@@ -1,7 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { buildTools } from '@/lib/mcp/tools';
-import { constantTimeEqual } from '@/lib/auth/session';
-import { getSetting } from '@/lib/settings/store';
+import { checkMcpToken } from '@/lib/mcp/token';
 import { dispatch, type JsonRpcRequest } from '@/lib/mcp/protocol';
 
 export const runtime = 'nodejs';
@@ -40,20 +39,15 @@ function unauthorized(): NextResponse {
 
 /**
  * Bearer auth against a token that has nothing to do with the dashboard
- * password: it can be handed to a client and revoked on its own. Compared in
- * constant time, and never logged.
+ * password: it can be handed to a client and revoked on its own. Stored as a
+ * scrypt hash, verified in constant time, and never logged.
  */
 async function authorized(req: NextRequest): Promise<boolean> {
-  const expected = await getSetting('mcp_token');
-  if (!expected) return false;
-
   const header = req.headers.get('authorization') ?? '';
   const bearer = header.toLowerCase().startsWith('bearer ') ? header.slice(7).trim() : '';
   // Some clients can only put the key in the query string.
   const query = req.nextUrl.searchParams.get('apikey') ?? '';
-  const presented = bearer || query;
-  if (!presented) return false;
-  return constantTimeEqual(presented, expected);
+  return checkMcpToken(bearer || query);
 }
 
 export async function POST(req: NextRequest) {
