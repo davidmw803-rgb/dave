@@ -6,6 +6,7 @@ import {
   setSetting,
   type SettingKey,
 } from '@/lib/settings/store';
+import { MCP_TOKEN_SETTING_KEY, hashMcpToken } from '@/lib/mcp/token';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -38,7 +39,11 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    await setSetting(body.key, body.value);
+    // The MCP token is only ever checked, never sent anywhere, so what gets
+    // stored is a hash of it and the token itself is never written down.
+    const value =
+      body.key === MCP_TOKEN_SETTING_KEY ? hashMcpToken(body.value.trim()) : body.value;
+    await setSetting(body.key, value);
   } catch (e) {
     return NextResponse.json(
       { error: e instanceof Error ? e.message : 'Could not save setting.' },
