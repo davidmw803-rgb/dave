@@ -67,13 +67,34 @@ function fail(
 }
 
 /**
+ * Which methods need a credential.
+ *
+ * Handshake and discovery are deliberately open. A client that must
+ * authenticate before it can even ask what a server is looks, to Claude's
+ * connector flow, exactly like a server demanding OAuth — it sees the 401,
+ * goes hunting for a sign-in service, and fails to register with one that
+ * does not exist. Answering `initialize` and `tools/list` in the clear costs
+ * nothing (tool names and descriptions, no data, no actions) and is what
+ * every remote MCP server that connects cleanly actually does.
+ *
+ * Everything that touches data or spends API quota still needs the token.
+ */
+function needsAuth(method: string): boolean {
+  return method === 'tools/call';
+}
+
+/**
  * Handle one request. Returns null for a notification, which by JSON-RPC's
  * rules gets no response body at all.
+ *
+ * `authorized` is consulted only for the methods that need it, so an
+ * unauthenticated client can still complete a handshake and see the tool list.
  */
 export async function dispatch(
   req: JsonRpcRequest,
   tools: McpTool[],
-  info: ServerInfo
+  info: ServerInfo,
+  authorized: () => Promise<boolean> = async () => true
 ): Promise<JsonRpcResponse | null> {
   const id = req.id ?? null;
   const method = req.method;
@@ -116,6 +137,24 @@ export async function dispatch(
       });
 
     case 'tools/call': {
+      if (needsAuth(method) && !(await authorized())) {
+        // Reported as a failed tool call rather than an HTTP 401: a transport
+        // error here sends the client back into the OAuth hunt, while this
+        // puts a readable reason in front of whoever is holding it wrong.
+        return ok(id, {
+          content: [
+            {
+              type: 'text',
+              text:
+                'Not authorized. This server needs its MCP access token, either as ' +
+                'an Authorization: Bearer header or an ?apikey= query parameter on ' +
+                'the server URL. Set one on /settings if there is none.',
+            },
+          ],
+          isError: true,
+        });
+      }
+
       const name = req.params?.name;
       if (typeof name !== 'string') {
         return fail(id, RPC.INVALID_PARAMS, 'tools/call needs a tool name.');

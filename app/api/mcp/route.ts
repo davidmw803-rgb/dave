@@ -26,17 +26,6 @@ Read this before drawing conclusions:
 - This is one person's research on their own data. It is not investment advice
   and must not be presented as a recommendation.`;
 
-function unauthorized(): NextResponse {
-  return NextResponse.json(
-    {
-      jsonrpc: '2.0',
-      id: null,
-      error: { code: -32001, message: 'Unauthorized. Send Authorization: Bearer <MCP token>.' },
-    },
-    { status: 401, headers: { 'WWW-Authenticate': 'Bearer' } }
-  );
-}
-
 /**
  * Bearer auth against a token that has nothing to do with the dashboard
  * password: it can be handed to a client and revoked on its own. Stored as a
@@ -51,8 +40,6 @@ async function authorized(req: NextRequest): Promise<boolean> {
 }
 
 export async function POST(req: NextRequest) {
-  if (!(await authorized(req))) return unauthorized();
-
   let body: unknown;
   try {
     body = await req.json();
@@ -68,10 +55,18 @@ export async function POST(req: NextRequest) {
 
   // A batch is a JSON array; a single call is an object. Notifications produce
   // no response, so a batch of only notifications answers 202 with no body.
+  // Checked once per request and only when a tool is actually called, so the
+  // handshake stays open and the token is still verified before any work.
+  let checked: boolean | null = null;
+  const isAuthorized = async (): Promise<boolean> => {
+    if (checked === null) checked = await authorized(req);
+    return checked;
+  };
+
   const batch = Array.isArray(body) ? (body as JsonRpcRequest[]) : [body as JsonRpcRequest];
   const responses = [];
   for (const one of batch) {
-    const res = await dispatch(one, tools, info);
+    const res = await dispatch(one, tools, info, isAuthorized);
     if (res) responses.push(res);
   }
 
