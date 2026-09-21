@@ -8,10 +8,13 @@ import {
 
 export const config = {
   // Everything except Next internals, the login endpoints, the self-gated
-  // static ops page in public/, and the MCP endpoint — which carries its own
-  // bearer token because an MCP client has no session cookie to present.
+  // static ops page in public/, the MCP endpoint — which carries its own
+  // bearer token because an MCP client has no session cookie to present — and
+  // `.well-known`, where OAuth discovery has to be able to reach a 404. A
+  // redirect to /login there reads to an MCP client as a sign-in service it
+  // must register with, which is how the connector handshake used to fail.
   matcher: [
-    '/((?!_next/|favicon.ico|robots.txt|dashboard.html|login|api/auth/|api/mcp).*)',
+    '/((?!_next/|favicon.ico|robots.txt|dashboard.html|login|api/auth/|api/mcp|\\.well-known/).*)',
   ],
 };
 
