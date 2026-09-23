@@ -36,6 +36,19 @@ export function marketDate(iso: string): string | null {
   return dateFormatter.format(d);
 }
 
+/**
+ * Today's date in market time, as YYYY-MM-DD.
+ *
+ * Not `new Date().toISOString().slice(0, 10)`. Between 8pm ET and midnight the
+ * UTC date is already tomorrow, and an upstream that reasons in US/Eastern —
+ * Unusual Whales rejects any `end_date` past the current Eastern date with a
+ * 422 — will refuse a request built from the UTC clock for those four hours
+ * every evening. `now` is injectable so this is testable without mocking time.
+ */
+export function marketToday(now: Date = new Date()): string {
+  return dateFormatter.format(now);
+}
+
 export interface MarketMoment {
   /** 0 = Sunday, matching Date.getDay(). */
   weekday: number;

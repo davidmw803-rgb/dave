@@ -9,7 +9,8 @@
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "db:reset": "npx supabase db reset",
-    "db:types": "npx supabase gen types typescript --local > types/database.types.ts"
+    "db:types": "npx supabase gen types typescript --local > types/database.types.ts",
+    "test": "node --experimental-strip-types --import ./scripts/test-setup.mjs --test 'lib/**/__tests__/*.test.ts'"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.0",

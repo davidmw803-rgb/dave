@@ -3,6 +3,8 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { UnusualWhalesClient, type OhlcBarRaw } from '@/lib/uw/client';
 import { benchmarkFor } from './benchmarks';
 import { TTL, callKey, getOrFetch } from './cache';
+import { marketDate } from './market-time';
+import { dailyWindowFor } from './ohlc-window';
 import type { EnrichResult } from './types';
 
 /**
@@ -94,19 +96,6 @@ function addDays(iso: string, days: number): string {
   return d.toISOString().slice(0, 10);
 }
 
-/**
- * The shared daily-bar request for a rating dated `iso`: one six-month series
- * per ticker-month, anchored 45 days past the end of that month so it reaches
- * the +30d window of a rating made on its last day. Capped at today, because
- * asking for bars that do not exist yet just returns fewer of them.
- */
-function dailyWindowFor(iso: string): { key: string; endDate: string } {
-  const month = iso.slice(0, 7);
-  const monthEnd = new Date(`${month}-01T00:00:00Z`);
-  monthEnd.setUTCMonth(monthEnd.getUTCMonth() + 1);
-  const end = Math.min(monthEnd.getTime() + 45 * 24 * 3600_000, Date.now());
-  return { key: month, endDate: new Date(end).toISOString().slice(0, 10) };
-}
 
 /**
  * Close of the last session on or before `targetDate` — so a window landing on
@@ -223,7 +212,13 @@ async function enrichEventWindows(
 ): Promise<void> {
   const ratedAt = new Date(event.rated_at);
   const ratedMs = ratedAt.getTime();
-  const day = ratedAt.toISOString().slice(0, 10);
+
+  // The rating's own session, in market time. A rating printed at 11:13pm ET
+  // has a UTC date of the NEXT day; asking UW for that day's minute bars
+  // fetched the wrong session, and resolving the day windows off it shifted
+  // every one of eod/+1d../+30d forward by a session — quietly pricing the
+  // rating against a close that had not happened yet when it was published.
+  const day = marketDate(event.rated_at) ?? ratedAt.toISOString().slice(0, 10);
 
   // Intraday bars for the rating's own session, then daily bars for the drift.
   //
@@ -425,7 +420,7 @@ async function enrichEventWindows(
 
   // EOD is the official close of the rating's own session, taken from the daily
   // bar — not the last post-market print, which is what the minute feed ends on.
-  const ratedDate = ratedAt.toISOString().slice(0, 10);
+  const ratedDate = day;
   if (ratedMs + 24 * 3600_000 <= now) {
     push('eod', closeOnOrBefore(daily, ratedDate), adjusted(ratedDate));
   }

@@ -1,5 +1,6 @@
 import 'server-only';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { NEGATIVE_TTL_MS, shouldCacheFailure } from './cache-policy';
 
 /**
  * One row per outbound API call, keyed by what the call *is* rather than who
@@ -30,7 +31,8 @@ export function callKey(provider: string, endpoint: string, ...parts: string[]):
 
 /**
  * Run `fetcher` unless a live cache entry already answers this call.
- * Errors are cached briefly too, so a broken ticker doesn't get hammered.
+ * A 404 is cached briefly, so a ticker with no data doesn't get hammered;
+ * no other failure is cached at all.
  */
 export async function getOrFetch<T>(
   key: string,
@@ -90,10 +92,12 @@ export async function getOrFetch<T>(
   } catch (e) {
     const message = e instanceof Error ? e.message : 'request failed';
 
-    // A rate limit or a 5xx says "not now", not "no". Caching those would
-    // lock the affected calls out for five minutes and make a burst of 429s
-    // look like permanent data loss.
-    if ((e as { retryable?: boolean }).retryable === true) throw e;
+    // Only a 404 is remembered — see `shouldCacheFailure`. A 429 or 5xx says
+    // "not now", and a 400/422 says the request itself was wrong; storing
+    // either one makes the next pass replay the error instead of retrying,
+    // which is how a malformed `end_date` turned into 110 ratings reporting
+    // `fetched: 0, failed: 110` with no call made.
+    if (!shouldCacheFailure(e)) throw e;
 
     // Short negative cache: long enough to stop a retry storm, short enough
     // that a transient outage doesn't poison the day.
@@ -107,7 +111,7 @@ export async function getOrFetch<T>(
         response: null,
         error: message,
         fetched_at: new Date().toISOString(),
-        expires_at: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+        expires_at: new Date(Date.now() + NEGATIVE_TTL_MS).toISOString(),
       },
       { onConflict: 'call_key' }
     );
