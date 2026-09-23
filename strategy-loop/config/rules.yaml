@@ -1,0 +1,73 @@
+# Promotion thresholds (spec §8.6). Changing any value requires a git commit by
+# David. Agents have no write access to config/.
+
+holdout:
+  months: 12            # holdout_start = today - 12 months, rolled quarterly
+
+in_sample:
+  min_events: 200       # n > 200
+  min_dates: 50         # > 50 distinct event dates
+  min_mean_ar: 0.015    # mean trade abnormal return, net of costs
+  min_hit_rate: 0.55
+  max_p: 0.01           # two-way clustered (date x issuer)
+  half_max_p: 0.05      # each half of the in-sample period: same sign and p < this
+  # "Deflated Sharpe > 0": the observed per-trade Sharpe minus the Sharpe
+  # expected from the best of trial_counter null trials (Bailey & Lopez de Prado).
+  min_deflated_sharpe: 0.0
+  min_null_percentile: 99.0
+
+holdout_pass:
+  min_events: 50
+  min_mean_ar: 0.010
+  max_p: 0.05
+
+paper_to_live_small:     # flagged to David, never automatic
+  min_trading_days: 30
+  min_closed_trades: 20
+  realized_interval: 0.80
+  max_slippage_vs_model: 1.5
+
+analyzer:
+  max_variants_per_hypothesis: 12
+
+nulls:
+  n_placebos: 200
+  seed: 7
+
+backtest:
+  # Notional used for the capacity check (position <= 2% of 20d avg $ volume).
+  notional_per_trade: 25000
+  max_pct_of_adv: 0.02
+  default_max_gap_pct: 15
+  atr_window: 14
+  # Entries decided after this ET time go to the next open, not today's close.
+  same_day_close_cutoff: "15:45"
+  horizons: [1, 5, 20]
+
+costs:
+  # One-way spread + slippage in basis points by 20-day average dollar volume.
+  # Recalibrate from paper/live fills once available.
+  liquidity_buckets:
+    - {max_adv: 1.0e6,  one_way_bps: 60}
+    - {max_adv: 5.0e6,  one_way_bps: 35}
+    - {max_adv: 2.5e7,  one_way_bps: 20}
+    - {max_adv: 1.0e8,  one_way_bps: 10}
+    - {max_adv: .inf,   one_way_bps: 5}
+  fee_per_share: 0.0     # broker schedule
+  sec_fee_bps_on_sell: 0.278
+
+benchmarks:
+  # Abnormal return = stock return - sector ETF return over the same window.
+  fallback: SPY
+  sector_etfs:
+    Communication Services: XLC
+    Consumer Discretionary: XLY
+    Consumer Staples: XLP
+    Energy: XLE
+    Financials: XLF
+    Health Care: XLV
+    Industrials: XLI
+    Information Technology: XLK
+    Materials: XLB
+    Real Estate: XLRE
+    Utilities: XLU

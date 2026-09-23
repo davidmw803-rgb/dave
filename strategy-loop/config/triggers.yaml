@@ -1,0 +1,15 @@
+# Deterministic rules that wake the researcher. The agent only sees the matched bundle.
+rules:
+  - id: contract_award_large
+    event_type: contract_award
+    when: {award_to_mcap_min: 0.20}
+  - id: insider_cluster_buy
+    event_type: insider_buy
+    window_days: 10
+    min_count: 3
+  - id: options_sweep_outsized
+    event_type: options_sweep
+    when: {premium_to_30d_avg_min: 5.0}
+  - id: top_decile_initiation
+    event_type: analyst_initiation
+    when: {analyst_score_pctile_min: 90}

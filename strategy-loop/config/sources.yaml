@@ -1,0 +1,19 @@
+# Realistic latency from source publication to the moment the system could
+# act. Used for point-in-time entry on backfilled events, where ts_ingested is
+# the backfill time rather than the live ingestion time.
+sources:
+  uw:
+    latency_seconds: 120
+    expected_interval_minutes: 30     # watchdog staleness threshold (market hours)
+  edgar:
+    latency_seconds: 60
+    expected_interval_minutes: 60
+    max_requests_per_second: 8        # SEC fair access: <= 10 req/s
+  usaspending:
+    latency_seconds: 3600
+    expected_interval_minutes: 1440
+  prices:
+    latency_seconds: 0
+    expected_interval_minutes: 1440
+# ts_ingested more than this long after ts_published marks a backfilled row.
+backfill_threshold_hours: 24

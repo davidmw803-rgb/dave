@@ -1,0 +1,21 @@
+timezone: America/New_York
+market_hours: {start: "09:25", end: "16:05"}
+fast_loop_seconds: 45
+steps:
+  evaluator: "06:30"
+  orchestrator: "07:00"
+  researcher: "07:30"
+  analyzer: "08:00"
+  eod: "16:30"
+  daily_report: "17:00"
+weekly: {day: saturday}
+llm:
+  max_scheduled_calls_per_weekday: 6
+  max_triggered_wakeups_per_day: 20
+  monthly_budget_usd: 200
+  models:
+    orchestrator: opus
+    researcher: sonnet
+    researcher_bulk: haiku
+    analyzer: sonnet
+    evaluator: sonnet

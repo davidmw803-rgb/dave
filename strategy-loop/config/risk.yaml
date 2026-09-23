@@ -1,0 +1,22 @@
+# Executor hard limits (spec §9). Read by code only; agents cannot modify.
+per_trade:
+  max_risk_pct: 0.25          # % of account at risk (entry - stop) per trade
+  max_position_pct: 5.0       # % of account notional per position
+per_strategy:
+  max_open_positions: 3
+  max_drawdown_pct_of_allocation: 8.0   # breach -> auto-demote to paper
+portfolio:
+  max_open_positions: 10
+  max_gross_exposure_pct: 50.0
+  max_sector_pct: 25.0
+  max_positions_per_ticker: 2
+  max_daily_loss_pct: 2.0     # halt new entries for the day
+  max_weekly_loss_pct: 5.0    # halt new entries until David resumes
+sizing:
+  kelly_after_live_trades: 50
+  kelly_fraction: 0.25
+account:
+  # Pattern-day-trader handling. Confirm the current rule for the account in Phase 0.
+  pdt_applies: true
+  pdt_min_equity: 25000
+  pdt_max_day_trades_5d: 3
