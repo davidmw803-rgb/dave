@@ -1,0 +1,32 @@
+# Coverage map dimensions (spec §5).
+catalyst_types:
+  - analyst_initiation
+  - analyst_upgrade
+  - analyst_downgrade
+  - insider_buy
+  - insider_cluster_buy
+  - congress_trade
+  - options_sweep
+  - sec_8k_contract
+  - contract_award
+  - s1_424b_offering
+  - activist_13d
+sectors:   # GICS level 1
+  - Communication Services
+  - Consumer Discretionary
+  - Consumer Staples
+  - Energy
+  - Financials
+  - Health Care
+  - Industrials
+  - Information Technology
+  - Materials
+  - Real Estate
+  - Utilities
+cap_buckets:
+  micro: [0, 3.0e8]
+  small: [3.0e8, 2.0e9]
+  mid:   [2.0e9, 1.0e10]
+  large: [1.0e10, .inf]
+min_event_count: 200
+allocation: {follow_up: 0.60, untested: 0.25, open: 0.15}

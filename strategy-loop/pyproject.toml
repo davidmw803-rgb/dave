@@ -1,0 +1,33 @@
+[project]
+name = "strategy-loop"
+version = "0.1.0"
+description = "Multi-agent research loop for event-driven equity strategies. Agents propose; code measures."
+requires-python = ">=3.11"
+dependencies = [
+  "duckdb>=1.0",
+  "pandas>=2.2",
+  "numpy>=1.26",
+  "scipy>=1.11",
+  "statsmodels>=0.14",
+  "pydantic>=2.6",
+  "pyyaml>=6.0",
+  "pyarrow>=15",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+api = ["anthropic>=0.40"]
+
+[project.scripts]
+loop = "sloop.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
