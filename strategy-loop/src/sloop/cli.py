@@ -48,6 +48,17 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("strategy_id"); ap.add_argument("--to", choices=["live_small", "live"], required=True)
     ap.add_argument("--allocation", type=float)
 
+    rc = sub.add_parser("run-cycle", help="one slow-loop day: orchestrator -> researcher -> analyzer")
+    st = sub.add_parser("step", help="run one slow-loop step (what the scheduler calls)")
+    st.add_argument("name", choices=["orchestrator", "researcher", "analyzer"])
+    sm = sub.add_parser("simulate", help="replay N weekday cycles from --start against history")
+    sm.add_argument("--start", required=True); sm.add_argument("--days", type=int, default=5)
+    for x in (rc, st, sm):
+        x.add_argument("--as-of", dest="as_of", help="cycle date (default today)")
+        x.add_argument("--backend", choices=["claude_code", "api", "fake"], help="default: $LLM_BACKEND or claude_code")
+        x.add_argument("--placebos", type=int, help="override null placebo count (faster dry runs)")
+    sub.add_parser("audit", help="Phase 2 checks: holdout leaks, duplicate families, repeated holdout runs")
+
     sub.add_parser("halt", help="stop new orders immediately (touch KILL)")
     sub.add_parser("resume", help="clear KILL")
     sub.add_parser("status")
@@ -95,6 +106,24 @@ def main(argv: list[str] | None = None) -> int:
     elif a.cmd == "approve":
         ledger.approve_strategy(con, a.strategy_id, a.to, ledger.HUMAN, a.allocation)
         print(f"{a.strategy_id} -> {a.to}")
+    elif a.cmd in ("run-cycle", "step"):
+        from sloop.agents import cycle
+        as_of = date.fromisoformat(a.as_of) if a.as_of else date.today()
+        if a.cmd == "step":
+            _print(cycle.run_step(con, a.name, as_of, a.backend, a.placebos))
+        else:
+            _print(cycle.run_cycle(con, as_of, a.backend, a.placebos))
+    elif a.cmd == "simulate":
+        from sloop.agents import cycle
+        _print(pd.DataFrame(cycle.simulate(con, date.fromisoformat(a.start), a.days, a.backend, a.placebos)))
+        problems = cycle.audit_leaks(con)
+        print("audit:", "clean" if not problems else problems)
+        return 1 if problems else 0
+    elif a.cmd == "audit":
+        from sloop.agents import cycle
+        problems = cycle.audit_leaks(con)
+        print("clean" if not problems else "\n".join(problems))
+        return 1 if problems else 0
     elif a.cmd == "resume":
         orders.kill_file().unlink(missing_ok=True)
         audit(con, ledger.HUMAN, "resume", None)

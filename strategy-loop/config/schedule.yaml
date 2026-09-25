@@ -11,11 +11,20 @@ steps:
 weekly: {day: saturday}
 llm:
   max_scheduled_calls_per_weekday: 6
+  max_scheduled_calls_weekend: 20   # Saturday extended research
   max_triggered_wakeups_per_day: 20
   monthly_budget_usd: 200
+  effort:          # output_config.effort on the api backend
+    orchestrator: high
+    researcher: high
+    researcher_wakeup: medium
+    analyzer: high
+    analyzer_findings: medium
   models:
     orchestrator: opus
     researcher: sonnet
     researcher_bulk: haiku
     analyzer: sonnet
+    analyzer_findings: sonnet
+    researcher_wakeup: sonnet
     evaluator: sonnet

@@ -84,5 +84,14 @@ CREATE TABLE IF NOT EXISTS audit (
 CREATE TABLE IF NOT EXISTS holdout_state (
   id INTEGER PRIMARY KEY, holdout_start DATE, rolled_at TIMESTAMPTZ
 );
+CREATE TABLE IF NOT EXISTS tasks (
+  task_id VARCHAR PRIMARY KEY, kind VARCHAR, ref VARCHAR, payload_json JSON, status VARCHAR,
+  created_by VARCHAR, created_at TIMESTAMPTZ, done_at TIMESTAMPTZ, note VARCHAR
+);
+CREATE TABLE IF NOT EXISTS findings (
+  finding_id VARCHAR PRIMARY KEY, hypothesis_id VARCHAR, test_ids JSON, interpretation VARCHAR,
+  parameter_sensitivity VARCHAR, confounds_json JSON, prompt_version VARCHAR, created_at TIMESTAMPTZ
+);
+ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS day DATE;
 INSERT INTO trial_counter VALUES (1, 0) ON CONFLICT DO NOTHING;
 """
