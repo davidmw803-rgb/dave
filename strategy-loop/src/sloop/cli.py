@@ -23,6 +23,11 @@ def _print(obj) -> None:
         print(json.dumps(obj, indent=2, default=str))
 
 
+def clock_today() -> date:
+    from sloop import clock
+    return clock.Clock().et().date()
+
+
 def load_dotenv(path: Path | None = None) -> None:
     """Read KEY=VALUE lines from strategy-loop/.env into the environment (existing vars win)."""
     from sloop import config as _cfg
@@ -77,7 +82,7 @@ def main(argv: list[str] | None = None) -> int:
 
     rc = sub.add_parser("run-cycle", help="one slow-loop day: orchestrator -> researcher -> analyzer")
     st = sub.add_parser("step", help="run one slow-loop step (what the scheduler calls)")
-    st.add_argument("name", choices=["orchestrator", "researcher", "analyzer"])
+    st.add_argument("name", choices=["evaluator", "orchestrator", "researcher", "analyzer"])
     sm = sub.add_parser("simulate", help="replay N weekday cycles from --start against history")
     sm.add_argument("--start", required=True); sm.add_argument("--days", type=int, default=5)
     for x in (rc, st, sm):
@@ -106,6 +111,12 @@ def main(argv: list[str] | None = None) -> int:
     ins.add_argument("--uninstall", action="store_true")
     sub.add_parser("jobs", help="list the schedule and when each job last ran")
     sub.add_parser("roll-holdout", help="quarterly: move holdout_start to today minus 12 months")
+
+    rp = sub.add_parser("report", help="write the daily or weekly report (data/reports/) and push its summary")
+    rp.add_argument("kind", choices=["daily", "weekly"]); rp.add_argument("--day")
+    ls = sub.add_parser("lessons", help="compact feedback into data/lessons.md (weekly)")
+    ls.add_argument("action", choices=["compact", "show"]); ls.add_argument("--backend", choices=["claude_code", "api", "fake"])
+    sub.add_parser("scores", help="rebuild and show agent scorecards (§10)")
 
     sub.add_parser("halt", help="stop new orders immediately (touch KILL)")
     sub.add_parser("resume", help="clear KILL")
@@ -136,7 +147,7 @@ def main(argv: list[str] | None = None) -> int:
 
     from sloop.store.duck import connect_retry
     con = connect_retry(a.db) if a.db is None else connect(a.db)
-    if a.cmd in ("flush", "eod", "wakeups", "run-cycle", "step", "approve"):
+    if a.cmd in ("flush", "eod", "wakeups", "run-cycle", "step", "approve", "report"):
         from sloop import ops
         from sloop.store import hot
         hcon = hot.connect()
@@ -148,6 +159,21 @@ def main(argv: list[str] | None = None) -> int:
         _print(ops.eod(hcon, con, date.fromisoformat(a.day) if a.day else None))
     elif a.cmd == "wakeups":
         _print(ops.drain_wakeups(hcon, con, a.backend))
+    elif a.cmd == "report":
+        from sloop.report import reports
+        day = date.fromisoformat(a.day) if a.day else clock_today()
+        print(reports.write(a.kind, con, hcon, day))
+    elif a.cmd == "lessons":
+        from sloop.agents import feedback, lessons
+        if a.action == "compact":
+            _print(lessons.compact(con, clock_today(), a.backend))
+        else:
+            print(feedback.digest() or "(no lessons.md yet)")
+    elif a.cmd == "scores":
+        from sloop.agents import scores
+        scores.compute(con)
+        _print(scores.table(con))
+        _print(scores.research_weights(con))
     elif a.cmd == "roll-holdout":
         from sloop.harness import holdout
         print(f"holdout_start = {holdout.roll(con)}")

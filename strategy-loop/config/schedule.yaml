@@ -4,16 +4,18 @@ fast_loop_seconds: 45
 # Slow-loop jobs (§4). Times are ET. `loop install` turns these into launchd
 # agents / systemd timers that call `loop job <name>`, which runs the command
 # only when the ET clock matches (DST-safe on any host timezone) and at most
-# once per day for `at` jobs. Jobs from later phases are listed but disabled.
+# once per day for `at` jobs. Set `enabled: false` to keep a job listed but off.
 jobs:
-  evaluator:     {cmd: "step evaluator",    at: "06:30", days: weekdays, enabled: false}   # Phase 4
+  evaluator:     {cmd: "step evaluator",    at: "06:30", days: weekdays}
   orchestrator:  {cmd: "step orchestrator", at: "07:00", days: weekdays}
   researcher:    {cmd: "step researcher",   at: "07:30", days: weekdays}
   analyzer:      {cmd: "step analyzer",     at: "08:00", days: weekdays}
   wakeups:       {cmd: "wakeups",           every_minutes: 10, window: ["09:30", "16:00"], days: weekdays, trading_day: true}
   flush:         {cmd: "flush",             every_minutes: 30, window: ["00:00", "23:59"], days: all}
   eod:           {cmd: "eod",               at: "16:30", days: weekdays, trading_day: true}
-  daily_report:  {cmd: "report daily",      at: "17:00", days: weekdays, enabled: false}   # Phase 4
+  daily_report:  {cmd: "report daily",      at: "17:00", days: weekdays, trading_day: true}
+  lessons_compact: {cmd: "lessons compact", at: "08:30", days: [saturday]}   # before weekend research reads it
+  weekly_report: {cmd: "report weekly",     at: "12:00", days: [saturday]}
   backup:        {cmd: "backup",            at: "23:00", days: all}
   weekly_research: {cmd: "run-cycle",       at: "09:00", days: [saturday]}   # extended research, weekend call cap
   holdout_roll:  {cmd: "roll-holdout",      at: "06:00", days: all, months: [1, 4, 7, 10], day_of_month: 1}
@@ -30,6 +32,8 @@ llm:
     researcher_wakeup: medium
     analyzer: high
     analyzer_findings: medium
+    evaluator: high
+    lessons: medium
   # Exact Claude API model IDs (checked against platform.claude.com models
   # overview, 2026-09-25). Both backends pass these through unchanged.
   models:

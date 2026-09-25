@@ -39,7 +39,7 @@ def _family_tested(con: duckdb.DuckDBPyConnection, family_key: str, exclude: str
 
 
 def _expected(con: duckdb.DuckDBPyConnection, hypothesis_id: str) -> tuple[dict[str, Any], dict[str, float]]:
-    row = con.execute("""SELECT variant_json, mean_ar, hit_rate, details_json FROM tests WHERE hypothesis_id = ?
+    row = con.execute("""SELECT variant_json, mean_ar, hit_rate, details_json, n_events FROM tests WHERE hypothesis_id = ?
                          AND sample = 'in' AND segment_key IS NULL AND passed ORDER BY mean_ar DESC LIMIT 1""",
                       [hypothesis_id]).fetchone()
     variant = json.loads(row[0]) if row and isinstance(row[0], str) else (row[0] if row else {})
@@ -47,6 +47,11 @@ def _expected(con: duckdb.DuckDBPyConnection, hypothesis_id: str) -> tuple[dict[
     exp = {"mean_ar": float(row[1]), "hit_rate": float(row[2])} if row else {}
     if se:
         exp["mean_ar_se"] = float(se)
+        if row[4]:
+            # Per-trade dispersion implied by the clustered SE (wider than iid, so the
+            # evaluator's "within the backtest's 80% interval" test errs lenient, not strict).
+            exp["ar_std"] = float(se) * float(row[4]) ** 0.5
+            exp["n_events"] = float(row[4])
     return variant or {}, exp
 
 

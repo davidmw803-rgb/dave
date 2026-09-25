@@ -33,6 +33,7 @@ from sloop.executor import orders as order_ctl
 from sloop.executor import portfolio, risk
 from sloop.executor.broker import Broker, Quote, QuoteSource
 from sloop.harness import events as ev_rules
+from sloop.harness.costs import one_way_bps
 from sloop.schemas import StrategyConfig
 from sloop.store import hot
 from sloop.watchdog.alerts import alert
@@ -242,7 +243,9 @@ class Executor:
         max_exit = clock.add_trading_days(now_et.date(), horizon - 1 if s["entry_window"] == "open" else horizon)
         details = {"equity": state.equity, "risk_amount": qty * (b.limit - b.stop), "notional": qty * b.limit,
                    "sector": ref.get("sector"), "max_exit_date": max_exit.isoformat(), "adv": adv,
-                   "binding_cap": d.reason, "window": s["entry_window"]}
+                   "binding_cap": d.reason, "window": s["entry_window"],
+                   # For the evaluator's slippage-vs-model check (§3.6).
+                   "ref_price": q.last, "model_one_way_bps": one_way_bps(adv)}
         ts = self._now()
         with hot.tx(self.con):  # record intent before touching the broker: a crash here is recoverable
             self.con.execute("INSERT OR IGNORE INTO orders VALUES (?, ?, ?, ?, NULL, ?, ?, 'buy', ?, 'limit', ?, ?, ?, 'paper', "

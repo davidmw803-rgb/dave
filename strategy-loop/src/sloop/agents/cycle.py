@@ -1,4 +1,4 @@
-"""One slow-loop day (§4): orchestrator -> researcher -> analyzer.
+"""One slow-loop day (§4): evaluator -> orchestrator -> researcher -> analyzer.
 
 The scheduler runs the steps separately at 07:00 / 07:30 / 08:00; this module
 also runs them back to back (``loop run-cycle``) and replays days against
@@ -12,16 +12,18 @@ from typing import Any
 
 import duckdb
 
-from sloop.agents import analyzer, llm, orchestrator, researcher
+from sloop.agents import analyzer, evaluator, llm, orchestrator, researcher
 from sloop.coverage import map as cov
 from sloop.store.duck import audit, trial_count
 
-STEPS = ("orchestrator", "researcher", "analyzer")
+STEPS = ("evaluator", "orchestrator", "researcher", "analyzer")
 
 
 def run_step(con: duckdb.DuckDBPyConnection, name: str, as_of: date, backend: str | None = None,
              n_placebos: int | None = None) -> Any:
     try:
+        if name == "evaluator":
+            return evaluator.step(con, as_of, backend)
         if name == "orchestrator":
             return orchestrator.step(con, as_of, backend)
         if name == "researcher":

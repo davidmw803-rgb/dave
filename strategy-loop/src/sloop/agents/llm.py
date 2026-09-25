@@ -211,6 +211,9 @@ def run(con: duckdb.DuckDBPyConnection, role: str, prompt_name: str, context: di
             return schema.model_validate_json(_extract_json(text)), version
         except (ValidationError, LLMError, json.JSONDecodeError) as e:
             last_err = e
+            # Kept so prompt problems show up in the ledger, not just as doubled cost.
+            con.execute("INSERT INTO audit VALUES (?, ?, 'llm_validation_retry', NULL, ?, ?, NULL)",
+                        [now(), role, json.dumps({"error": str(e)[:1500]}), version])
             attempt_prompt = (base + "\n\nYour previous answer was rejected by validation:\n"
                               + str(e)[:2000] + "\nReturn corrected JSON only.")
     raise LLMError(f"{role}: output failed validation twice: {last_err}")

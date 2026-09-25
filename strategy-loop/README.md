@@ -10,7 +10,8 @@ A system that proposes, tests, trades and evaluates event-driven stock strategie
 | 1 — data + harness | **built.** Tested on synthetic data. Real data still needs a price/universe source |
 | 2 — slow loop (agents) | **built.** Orchestrator, researcher (scheduled + event wakeups), analyzer, prompts, feedback, coverage map. Exit check passes with the `fake` backend |
 | 3 — fast loop (paper) | **built, paper only.** Ingestion service, trigger queue, executor, `paper_sim` broker, watchdog, reconciliation, flatten/kill. The exit check passes on a replayed two weeks. Real paper time on your machine is still to come |
-| 4–6 | not started |
+| 4 — evaluator + learning | **built.** Evaluator stats and agent step, hard-breach kills, eligibility alerts, agent scorecards, weekly lessons compaction, daily and weekly reports. Evaluator and report jobs are on |
+| 5–6 | not started |
 
 ## Quick start
 
@@ -19,7 +20,7 @@ cd strategy-loop
 pip install -e '.[dev]'
 loop demo            # synthetic market: harness self-test (about 20 s)
 loop simulate --start 2026-09-01 --days 5 --backend fake --placebos 10   # after demo: Phase 2 exit check
-pytest -q            # 95 tests
+pytest -q            # 113 tests
 ```
 
 `loop demo` builds a synthetic market with three planted event types and checks that the harness grades each one correctly:
@@ -270,17 +271,21 @@ loop status                     # heartbeats, controls, open positions, alerts
 
 | Job | When |
 |---|---|
+| `step evaluator` | 06:30 weekdays |
 | `step orchestrator` | 07:00 weekdays |
 | `step researcher` | 07:30 weekdays |
 | `step analyzer` | 08:00 weekdays |
 | `wakeups` | every 10 min, 09:30–16:00 on trading days |
 | `flush` | every 30 min |
 | `eod` | 16:30 on trading days |
+| `report daily` | 17:00 on trading days |
 | `backup` | 23:00 daily |
+| `lessons compact` | Saturday 08:30 |
+| `report weekly` | Saturday 12:00 |
 | `run-cycle` | Saturday 09:00 (extended research, weekend call cap of 20) |
 | `roll-holdout` | 06:00 on Jan/Apr/Jul/Oct 1 |
 
-The evaluator (06:30) and the daily report (17:00) are listed but disabled until Phase 4.
+Weekdays also run the evaluator at 06:30 and the daily report at 17:00; Saturdays run lessons compaction at 08:30 and the weekly report at 12:00.
 
 **How timing works on any host timezone.** launchd can't take a timezone, so each job's plist fires at every local time its ET slot can map to (both sides of DST). systemd timers carry `America/New_York` directly. Either way the unit calls `loop job <name>`, which:
 
@@ -303,6 +308,38 @@ Jobs that find the ledger locked by a long analyzer run wait up to 30 min (`job_
 - **Close everything:** `loop flatten`. It halts, then sells every paper position on the executor's next tick.
 - **Resume:** `loop resume` clears KILL and any sticky halt: weekly loss, reconciliation, flatten.
 - **Promote to real money:** there is still no live broker, so an approval to `live_small` only makes the executor skip that strategy's signals and alert. `loop approve <strategy_id> --to live_small` stays the only command that can change a strategy's state above paper.
+
+## Evaluator and learning (Phase 4)
+
+**Evaluator** (`loop step evaluator`, 06:30 on weekdays, and the first step of `run-cycle`):
+
+1. **Stats (code, `evaluator/stats.py`)** for each paper/live strategy:
+   - realized trade return and sector-ETF abnormal return (the same benchmark rule as the harness);
+   - hit rate, average win/loss, realized mean vs the backtest's 80% interval for that many trades;
+   - entry slippage vs the cost model (the executor now records the reference quote and modelled bps), fill rate;
+   - rolling 20-trade hit rate, drawdown on the allocation, results by regime at entry.
+2. **Hard risk breach:** drawdown past `max_drawdown_pct_of_allocation`. Code kills the strategy immediately, with no agent involved, and alerts.
+3. **Agent step:** one batched call for strategies with closed trades. It returns `keep | resize | revise | kill`, an attribution (`execution | signal | regime_decay | none`), the wrong assumption, and a lesson. Code enforces §3.6: before 20 closed trades or 30 trading days, anything but `keep` becomes `keep` and is logged as gated.
+4. **Where the results go:** verdicts land in `evaluations`, and the orchestrator sees the latest per strategy and acts on revise/kill. Lessons become feedback.
+5. **§8.6 eligibility for paper → live_small** is detected and alerted. Nothing is promoted; that stays `loop approve`.
+
+**Scorecards** (`loop scores`, rebuilt nightly by `eod`):
+
+- One row per proposer and source, for all time and the last 90 days: proposed, passed in-sample, passed holdout, profitable when traded.
+- Score = (in-sample + 2 × holdout + 4 × profitable) / (proposed + 5).
+- Research weights by source are 80% score-proportional plus a 20% exploration floor split evenly. The orchestrator and researcher both see them.
+
+**Lessons** (`loop lessons compact`, Saturday 08:30):
+
+- One LLM call merges the week's feedback with the current digest into at most 40 one-line lessons, grouped by agent.
+- It's written to `data/lessons.md`, capped at 6,000 characters, and the previous version is kept as `lessons.<date>.md`. Researcher and analyzer prompts carry it.
+
+**Reports** (`loop report daily|weekly`, 17:00 on trading days and Saturday 12:00) are Markdown files in `data/reports/`, with a one-line summary pushed to `LOOP_ALERT_WEBHOOK`:
+
+- **Daily:** closed trades and P&L, open positions, skipped-signal reasons, controls in force, evaluator verdicts, strategies eligible for live_small, research activity, ladder moves, LLM spend, alerts.
+- **Weekly:** everything above for the week, plus §12 program criteria, the coverage map, agent scorecards, research weights, and the lessons digest.
+
+Validation retries on any agent call are logged to `audit` (`llm_validation_retry`) with the error.
 
 ## Price and universe vendor
 
