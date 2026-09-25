@@ -18,7 +18,8 @@ import duckdb
 import pandas as pd
 
 from sloop import config
-from sloop.agents import feedback
+from sloop.agents import feedback, scores
+from sloop.agents.evaluator import latest as evaluator_latest
 from sloop.coverage import map as cov
 from sloop.harness import holdout
 from sloop.store.duck import trial_count
@@ -102,6 +103,10 @@ def orchestrator(con: duckdb.DuckDBPyConnection, as_of: date) -> dict[str, Any]:
         "recent_holdout_results": _records(holdout_done),
         "recent_findings": _records(findings),
         "strategies": _records(strategies),
+        # §3.1 inputs: evaluator verdicts (act on revise/kill) and agent scorecards (§10).
+        "evaluator_verdicts": evaluator_latest(con),
+        "agent_scorecards": _records(scores.table(con)),
+        "research_weights_by_source": scores.research_weights(con),
         "open_tasks": _records(con.execute("SELECT task_id, kind, ref FROM tasks WHERE status = 'open'").df()),
     }
 
@@ -147,6 +152,7 @@ def researcher(con: duckdb.DuckDBPyConnection, as_of: date) -> dict[str, Any]:
         "lessons": feedback.lessons_for(con, "researcher"),
         "lessons_digest": feedback.digest(),
         "scorecard": feedback.scorecard(con, "researcher"),
+        "research_weights_by_source": scores.research_weights(con),
     }
 
 

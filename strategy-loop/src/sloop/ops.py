@@ -60,6 +60,8 @@ def eod(hcon: sqlite3.Connection, con: duckdb.DuckDBPyConnection, day: date | No
             out["universe_rows"] = upsert_df(con, "universe_pit", u[["ticker", "date", "mcap", "sector", "industry",
                                                                      "avg_dollar_vol_20d", "listed"]])
     out["regimes"] = len(regimes.compute(con))
+    from sloop.agents import scores
+    out["agent_scores"] = len(scores.compute(con, day))
     out["refdata"] = hot.export_refdata(hcon, con)
     audit(con, "scheduler", "eod", None, out)
     return out

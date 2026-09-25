@@ -53,7 +53,8 @@ def test_units_are_well_formed(tmp_path, monkeypatch):
     job = plistlib.loads(mac["com.strategyloop.job-orchestrator.plist"])
     assert len(job["StartCalendarInterval"]) == 10 and job["ProgramArguments"][-2:] == ["job", "orchestrator"]
     assert plistlib.loads(mac["com.strategyloop.job-wakeups.plist"])["StartInterval"] == 600
-    assert "com.strategyloop.job-evaluator.plist" not in mac  # disabled until Phase 4
+    assert {"com.strategyloop.job-evaluator.plist", "com.strategyloop.job-daily_report.plist",
+            "com.strategyloop.job-weekly_report.plist", "com.strategyloop.job-lessons_compact.plist"} <= set(mac)
     lin = scheduler.systemd_units()
     assert "Restart=always" in lin["sloop-watchdog.service"]
     assert "OnCalendar=Mon,Tue,Wed,Thu,Fri *-*-* 07:00:00 America/New_York" in lin["sloop-job-orchestrator.timer"]

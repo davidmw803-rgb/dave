@@ -166,3 +166,19 @@ class EvaluatorVerdict(_Strict):
         if self.verdict != "keep" and not self.wrong_assumption:
             raise ValueError("non-keep verdicts must name the wrong parameter or assumption")
         return self
+
+
+class EvaluatorReport(_Strict):
+    verdicts: list[EvaluatorVerdict] = Field(default_factory=list)
+
+
+class Lesson(_Strict):
+    agent: Literal["researcher", "analyzer", "orchestrator", "evaluator"]
+    lesson: str = Field(min_length=10, max_length=400)
+    evidence: str = Field(default="", max_length=300)
+
+
+class LessonsDigest(_Strict):
+    """Weekly compaction of feedback into lessons.md (§10), capped in length."""
+
+    lessons: list[Lesson] = Field(default_factory=list, max_length=40)

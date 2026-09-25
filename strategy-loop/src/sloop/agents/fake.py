@@ -77,6 +77,37 @@ def analyzer_findings(ctx: dict[str, Any], _schema) -> dict[str, Any]:
     return {"findings": out}
 
 
+def evaluator(ctx: dict[str, Any], _schema) -> dict[str, Any]:
+    out = []
+    for st in ctx["strategies"]:
+        below = st.get("within_interval") is False and (st.get("mean_ar") or 0) < (st.get("expected") or {}).get("mean_ar", 0)
+        slip = (st.get("slippage") or {}).get("ratio")
+        if st.get("gate_open") and below:
+            attribution = "execution" if slip and slip > 1.5 else "signal"
+            out.append({"strategy_id": st["strategy_id"], "verdict": "revise", "attribution": attribution,
+                        "wrong_assumption": "cost model" if attribution == "execution" else "effect size",
+                        "lesson": "Realized abnormal return fell below the backtest interval."})
+        else:
+            out.append({"strategy_id": st["strategy_id"], "verdict": "keep", "attribution": "none",
+                        "lesson": "Results so far are consistent with the backtest."})
+    return {"verdicts": out}
+
+
+def lessons(ctx: dict[str, Any], _schema) -> dict[str, Any]:
+    seen, out = set(), []
+    for f in ctx["new_feedback"]:
+        agent = f["to_agent"] if f["to_agent"] in ("researcher", "analyzer", "orchestrator", "evaluator") else "researcher"
+        text = (f.get("lesson") or "").strip()
+        if len(text) < 10 or (agent, text) in seen:
+            continue
+        seen.add((agent, text))
+        out.append({"agent": agent, "lesson": text[:400], "evidence": f"{f['grade']} from {f['from_agent']}"})
+        if len(out) == 40:
+            break
+    return {"lessons": out}
+
+
 for _role, _fn in {"orchestrator": orchestrator, "researcher": researcher, "researcher_wakeup": researcher_wakeup,
-                   "analyzer": analyzer, "analyzer_findings": analyzer_findings}.items():
+                   "analyzer": analyzer, "analyzer_findings": analyzer_findings, "evaluator": evaluator,
+                   "lessons": lessons}.items():
     register_fake(_role, _fn)

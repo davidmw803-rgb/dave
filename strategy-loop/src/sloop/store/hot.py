@@ -191,7 +191,7 @@ def flush_to_duck(hot: sqlite3.Connection, duck: duckdb.DuckDBPyConnection) -> d
         sig["ts"] = pd.to_datetime(sig["ts"], utc=True)
     out["signals"] = upsert_df(duck, "signals", sig)
     od = pd.DataFrame(rows(hot, 'SELECT order_id, client_order_id, signal_id, broker_order_id, side, qty, type, "limit", stop, '
-                                'take_profit, mode, status, ts FROM orders'))
+                                'take_profit, mode, status, ts, details_json, strategy_id, ticker, position_id FROM orders'))
     if len(od):
         od["ts"] = pd.to_datetime(od["ts"], utc=True)
         duck.execute("DELETE FROM orders WHERE order_id IN (SELECT unnest(?))", [od["order_id"].tolist()])
