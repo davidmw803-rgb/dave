@@ -186,7 +186,7 @@ def test_claude_code_backend_runs_toolless_without_secrets(mem, monkeypatch):
     out, _ = llm.run(mem, "researcher", "researcher", {"a": 1}, ResearcherOutput, backend="claude_code", day=AS_OF)
     cmd = captured["cmd"]
     assert cmd[cmd.index("--tools") + 1] == "" and "--system-prompt" in cmd and "--no-session-persistence" in cmd
-    assert cmd[cmd.index("--model") + 1] == "sonnet"
+    assert cmd[cmd.index("--model") + 1] == "claude-sonnet-5"
     assert "UW_API_KEY" not in captured["env"] and "sloop-agent-" in captured["cwd"]
     assert mem.execute("SELECT cost_est FROM llm_usage").fetchone()[0] == pytest.approx(0.01)
 
@@ -213,15 +213,25 @@ def test_api_backend_caches_system_and_uses_fallbacks_on_opus(mem, monkeypatch):
 
     monkeypatch.setitem(sys.modules, "anthropic", types.SimpleNamespace(Anthropic=Client))
     llm.run(mem, "orchestrator", "orchestrator", {}, OrchestratorPlan, backend="api", day=AS_OF)
-    assert sent["model"] == "claude-opus-5" and sent["extra_body"] == {"fallbacks": "default"}
+    assert sent["model"] == "claude-opus-5-5" and sent["extra_body"] == {"fallbacks": "default"}
     assert sent["betas"] == ["server-side-fallback-2026-07-01"]
     assert sent["system"][0]["cache_control"] == {"type": "ephemeral"}
     assert sent["output_config"] == {"effort": "high"}
     cost = mem.execute("SELECT cost_est FROM llm_usage").fetchone()[0]
-    assert cost == pytest.approx((1000 * 5 + 2000 * 0.5 + 100 * 25) / 1e6)
+    assert cost == pytest.approx((1000 * 4 + 2000 * 4 * 0.05 + 100 * 20) / 1e6)
     sent["stop"] = "refusal"
     with pytest.raises(llm.LLMError, match="refusal"):
         llm.run(mem, "orchestrator", "orchestrator", {}, OrchestratorPlan, backend="api", day=AS_OF)
+
+
+def test_configured_models_are_known_ids_with_prices():
+    from sloop import config
+    for role, name in config.load("schedule")["llm"]["models"].items():
+        mid = llm.resolve_model(name)
+        assert mid in llm.PRICES, f"{role}: {mid} has no price entry"
+    # The API reports the dated Haiku snapshot; it must price as Haiku, not the fallback tier.
+    assert llm.price("claude-haiku-4-5-20251001")[:2] == (1.0, 5.0)
+    assert llm.resolve_model("opus") == "claude-opus-5-5"
 
 
 def test_every_prompt_exists_and_is_versioned():

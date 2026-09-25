@@ -114,7 +114,7 @@ That's 4 scheduled calls a weekday, under the cap of 6. Event-triggered wakeups 
 - `api` needs `pip install '.[api]'` and `ANTHROPIC_API_KEY`. It caches the system prompt, and Opus calls opt into Anthropic's server-side refusal fallbacks (`fallbacks: "default"`).
 - `fake` is deterministic and makes no model calls. Use it for tests and to try a new host before spending tokens.
 
-The models are `claude-opus-5` for the orchestrator and `claude-sonnet-5` for the rest. Change them in `config/schedule.yaml`.
+The models are `claude-opus-5-5` for the orchestrator and `claude-sonnet-5` for the rest, set as exact IDs in `config/schedule.yaml` and passed unchanged to both backends. Costs in `llm_usage` use `llm.PRICES`, keyed by the model that actually served each call.
 
 **Phase 2 exit check.** `loop simulate --start 2026-09-01 --days 5 --backend fake` on the demo database runs five weekday cycles against history, then `loop audit`:
 
