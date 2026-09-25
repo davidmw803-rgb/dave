@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import date
 from pathlib import Path
@@ -59,19 +60,58 @@ def main(argv: list[str] | None = None) -> int:
         x.add_argument("--placebos", type=int, help="override null placebo count (faster dry runs)")
     sub.add_parser("audit", help="Phase 2 checks: holdout leaks, duplicate families, repeated holdout runs")
 
+    sv = sub.add_parser("serve", help="run an always-on service (launchd/systemd call this)")
+    sv.add_argument("name", choices=["ingest", "executor", "watchdog"])
+    sub.add_parser("flush", help="copy fast-loop rows into the ledger and push strategies to the executor")
+    eo = sub.add_parser("eod", help="16:30 job: flush, refresh bars/universe for tickers in play, regimes, refdata")
+    eo.add_argument("--day")
+    wk = sub.add_parser("wakeups", help="run queued trigger wakeups through the researcher")
+    wk.add_argument("--backend", choices=["claude_code", "api", "fake"])
+    bk = sub.add_parser("backup", help="nightly parquet + hot-store backup")
+    bk.add_argument("dest", nargs="?", default=None)
+    sub.add_parser("flatten", help="halt entries and close every paper position on the executor's next tick")
+
     sub.add_parser("halt", help="stop new orders immediately (touch KILL)")
     sub.add_parser("resume", help="clear KILL")
     sub.add_parser("status")
     sub.add_parser("coverage")
     a = p.parse_args(argv)
+    if a.db and not os.environ.get("LOOP_HOT_PATH"):
+        os.environ["LOOP_HOT_PATH"] = str(Path(a.db).with_suffix(".hot.sqlite"))  # keep a custom ledger's hot store beside it
 
     if a.cmd == "halt":
         orders.kill_file().touch()
         print(f"halted: {orders.kill_file()} exists; no new orders will be placed")
         return 0
+    if a.cmd == "serve":
+        from sloop import services
+        services.serve(a.name)
+        return 0
+    if a.cmd == "flatten":
+        from sloop.store import hot
+        orders.kill_file().touch()
+        hot.set_control(hot.connect(), "flatten", "requested", ledger.HUMAN)
+        print("flatten requested: entries halted (KILL); the executor closes all paper positions on its next tick")
+        return 0
 
-    con = connect(a.db)
-    if a.cmd == "init":
+    from sloop.store.duck import connect_retry
+    con = connect_retry(a.db) if a.db is None else connect(a.db)
+    if a.cmd in ("flush", "eod", "wakeups", "run-cycle", "step", "approve"):
+        from sloop import ops
+        from sloop.store import hot
+        hcon = hot.connect()
+        if a.cmd != "eod":
+            ops.flush(hcon, con)  # agents and approvals see the latest fast-loop rows
+    if a.cmd == "flush":
+        _print(ops.flush(hcon, con))
+    elif a.cmd == "eod":
+        _print(ops.eod(hcon, con, date.fromisoformat(a.day) if a.day else None))
+    elif a.cmd == "wakeups":
+        _print(ops.drain_wakeups(hcon, con, a.backend))
+    elif a.cmd == "backup":
+        from sloop import config as cfg, ops as ops_
+        _print(str(ops_.backup(con, a.dest or cfg.data_dir() / "backups")))
+    elif a.cmd == "init":
         from sloop.coverage import map as cov
         print(f"coverage cells added: {cov.seed(con)}")
     elif a.cmd == "demo":
@@ -105,6 +145,7 @@ def main(argv: list[str] | None = None) -> int:
         _print(run.run_holdout(con, a.hypothesis_id))
     elif a.cmd == "approve":
         ledger.approve_strategy(con, a.strategy_id, a.to, ledger.HUMAN, a.allocation)
+        hot.sync_strategies(hcon, con)
         print(f"{a.strategy_id} -> {a.to}")
     elif a.cmd in ("run-cycle", "step"):
         from sloop.agents import cycle
@@ -113,6 +154,7 @@ def main(argv: list[str] | None = None) -> int:
             _print(cycle.run_step(con, a.name, as_of, a.backend, a.placebos))
         else:
             _print(cycle.run_cycle(con, as_of, a.backend, a.placebos))
+        hot.sync_strategies(hcon, con)  # promotions/kills reach the executor
     elif a.cmd == "simulate":
         from sloop.agents import cycle
         _print(pd.DataFrame(cycle.simulate(con, date.fromisoformat(a.start), a.days, a.backend, a.placebos)))
@@ -125,11 +167,25 @@ def main(argv: list[str] | None = None) -> int:
         print("clean" if not problems else "\n".join(problems))
         return 1 if problems else 0
     elif a.cmd == "resume":
+        from sloop.store import hot
+        h = hot.connect()
+        cleared = [r["key"] for r in hot.rows(h, "SELECT key FROM controls WHERE key IN "
+                                                "('halt','weekly_halt','reconciliation','daily_halt','flatten')")]
+        for k in cleared:
+            hot.set_control(h, k, None, ledger.HUMAN)
+        hot.set_cursor(h, "reconcile_streak", "0")
         orders.kill_file().unlink(missing_ok=True)
-        audit(con, ledger.HUMAN, "resume", None)
-        print("resumed: KILL cleared")
+        audit(con, ledger.HUMAN, "resume", None, {"cleared": cleared})
+        print(f"resumed: KILL cleared; controls cleared: {cleared or 'none'}")
     elif a.cmd == "status":
-        _print({"killed": orders.killed(), "trial_counter": trial_count(con)})
+        from sloop.store import hot
+        h = hot.connect()
+        _print({"killed": orders.killed(), "trial_counter": trial_count(con),
+                "controls": {r["key"]: r["value"] for r in hot.rows(h, "SELECT key, value FROM controls")},
+                "heartbeats": {r["service"]: [r["ts"], r["status"]] for r in hot.rows(h, "SELECT * FROM heartbeats")},
+                "open_positions": hot.one(h, "SELECT count(*) AS n FROM positions WHERE closed_at IS NULL")["n"],
+                "recent_alerts": [f"{r['ts']} {r['key']}: {r['message']}" for r in
+                                  hot.rows(h, "SELECT * FROM alerts ORDER BY alert_id DESC LIMIT 5")]})
         _print(con.execute("SELECT status, count(*) n FROM hypotheses GROUP BY 1 ORDER BY 1").df())
         _print(con.execute("SELECT strategy_id, state, allocation_pct, approved_by FROM strategies").df())
     elif a.cmd == "coverage":

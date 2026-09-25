@@ -49,10 +49,11 @@ def step(con: duckdb.DuckDBPyConnection, as_of: date, backend: str | None = None
 
 
 def on_event(con: duckdb.DuckDBPyConnection, event: dict[str, Any], backend: str | None = None,
-             day: date | None = None, rules: list[dict] | None = None) -> list[dict[str, Any]]:
+             day: date | None = None, rules: list[dict] | None = None,
+             fired: list[str] | None = None) -> list[dict[str, Any]]:
     """Event-triggered wakeup. The trigger filter has already matched; this asks
     whether the bundle suggests a new or existing hypothesis."""
-    fired = triggers.matches(con, event, rules)
+    fired = fired if fired is not None else triggers.matches(con, event, rules)
     if not fired:
         return []
     if triggers.wakeups_left_today(con) <= 0:

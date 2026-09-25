@@ -9,7 +9,7 @@ A system that proposes, tests, trades and evaluates event-driven stock strategie
 | 0 — checks (Webull API, `claude -p`, UW limits, PDT rule) | `claude -p` headless with JSON output: **checked** (one real researcher call, schema-valid). The rest needs your accounts |
 | 1 — data + harness | **built.** Tested on synthetic data. Real data still needs a price/universe source |
 | 2 — slow loop (agents) | **built.** Orchestrator, researcher (scheduled + event wakeups), analyzer, prompts, feedback, coverage map. Exit check passes with the `fake` backend |
-| 3 — fast loop (paper) | partial: risk limits, deterministic client order IDs, kill switch. Executor loop, Webull client, paper_sim, watchdog not written |
+| 3 — fast loop (paper) | **built, paper only.** Ingestion service, trigger queue, executor, `paper_sim` broker, watchdog, reconciliation, flatten/kill. The exit check passes on a replayed two weeks. Real paper time on your machine is still to come |
 | 4–6 | not started |
 
 ## Quick start
@@ -19,7 +19,7 @@ cd strategy-loop
 pip install -e '.[dev]'
 loop demo            # synthetic market: harness self-test (about 20 s)
 loop simulate --start 2026-09-01 --days 5 --backend fake --placebos 10   # after demo: Phase 2 exit check
-pytest -q            # 64 tests
+pytest -q            # 76 tests
 ```
 
 `loop demo` builds a synthetic market with three planted event types and checks that the harness grades each one correctly:
@@ -44,7 +44,13 @@ src/sloop/
   store/         DuckDB schema for every §6.3 table; parquet export
   harness/       market, events (point-in-time), returns, costs, stats, nulls,
                  segments, regimes, rules, holdout, run, synthetic
-  executor/      risk.py (all §9 limits), orders.py (client order IDs, KILL)
+  executor/      risk.py (all §9 limits), orders.py (client order IDs, KILL), portfolio.py,
+                 broker.py (interface, UW quotes), paper_sim.py, loop.py (executor), replay.py
+  store/hot.py   SQLite hot store shared by the always-on services
+  watchdog/      service.py (heartbeats, staleness), reconcile.py, alerts.py
+  services.py    `loop serve ingest|executor|watchdog`
+  ops.py         flush, eod, wakeups, backup
+  clock.py       NYSE calendar (config/market_calendar.yaml)
   agents/        llm.py (claude_code | api | fake), context.py (what each agent sees),
                  orchestrator.py, researcher.py, analyzer.py, feedback.py, tasks.py, cycle.py, fake.py
 prompts/         orchestrator, researcher, researcher_wakeup, analyzer, analyzer_findings
@@ -128,6 +134,63 @@ What that shows:
 - The map stops advancing once every cell that can reach 200 events has been tested, which is the correct behaviour. The synthetic world has only three such cells.
 
 `loop audit` checks three things: no in-sample trade exits on or after `holdout_start`, no family tested twice (revisions excepted), and no family with two holdout runs.
+
+## Fast loop (Phase 3, paper only)
+
+```
+ingest (24/7) ──► hot store (SQLite, WAL) ◄── executor (09:25–16:05) ──► paper_sim
+                     │     ▲                       ▲
+       wakeups queue │     │ strategies, refdata   │ watchdog (every minute):
+                     ▼     │                       │ heartbeats, staleness,
+      `loop wakeups` ──► DuckDB ledger ◄── `loop flush` / `loop eod`   reconciliation, limits
+```
+
+**Why two stores.** DuckDB allows one writing process, and an analyzer run holds it for minutes. The always-on services therefore use a SQLite hot store in WAL mode. `loop flush` (run before every slow-loop step, and by the scheduler) copies events, signals, orders, fills and positions into the ledger, and pushes frozen strategy configs back.
+
+**Ingestion** (`loop serve ingest`) polls UW analyst ratings and EDGAR's live "current filings" Atom feed every 60 s. The feed carries the acceptance time to the second; the quarterly backfill is date-only. Each new event runs through the trigger filter, and matches are queued. `loop wakeups` drains the queue through the researcher, and the scheduler runs it only in market hours, so overnight triggers wait (§4).
+
+**Executor** (`loop serve executor`) enters when the harness assumed entry, so paper results stay comparable to the backtest:
+
+| Event arrives | Entry window |
+|---|---|
+| before 09:30 | 09:30–09:45 at the open |
+| 09:30–15:45 | 15:45–15:55 near the close |
+| later | the next open |
+
+Each entry is a DAY limit bracket: limit = ask + 0.5%, stop = limit − ATR × `stop_atr_mult` (3 × ATR when the strategy sets none, because sizing needs a stop), and the strategy's target.
+
+- Every entry goes through `risk.check_entry`, and open entry orders count toward the caps.
+- The client order ID is `hash(strategy, event, leg)`, and the order is recorded before the broker sees it. After a crash, the executor adopts what the broker has, drops what it never got, then syncs fills.
+- Positions past `max_hold_days` are sold at 15:50.
+- Loss halts: daily at −2% clears the next day; weekly at −5% holds until `loop resume`. A strategy past 8% drawdown on its allocation is demoted if live and alerted either way.
+
+**`paper_sim` instead of Webull paper, for now.** Webull does have a paper environment (`api.sandbox.webull.com`, orders simulated). Its public docs show account listing and plain orders, but not the positions, open-orders or bracket calls that reconciliation needs. Rather than guess, `executor/broker.py` defines the interface and `paper_sim` implements it:
+
+- It keeps its own book (`sim_*` tables), so reconciliation compares two independent records.
+- It fills against UW last-trade quotes, with bid and ask modelled from the harness's spread for the ticker's liquidity bucket, so paper pays the costs the backtest charged.
+- Stops fill at min(bid, stop) less slippage, so gaps fill worse.
+- Unfilled entries expire at the close.
+- Limitation: `paper_sim` triggers stops only while the executor is running; a real broker holds them server-side.
+
+**Nothing places live orders.** There is no live broker class. `executor.broker` must be `paper_sim` or `loop serve` exits. A strategy David approves to `live_small`/`live` is skipped at signal time with an `live_broker_not_configured` alert. `loop approve` stays the only way to change a strategy's state above paper.
+
+**Watchdog** (`loop serve watchdog`, every minute):
+
+- **Heartbeats:** ingest always, the executor in market hours; alert after 3 minutes without one.
+- **Staleness** for each configured source.
+- **Reconciliation:** orders and per-ticker positions, the broker's book against the executor's. Two consecutive mismatches halt entries until `loop resume`.
+- **Hard-limit invariants:** risk and notional at entry, position counts.
+
+Alerts go to the `alerts` table, `data/alerts.log`, and a POST to `LOOP_ALERT_WEBHOOK` if it's set (an ntfy.sh topic URL works). The same key is sent at most once an hour.
+
+**Controls:** `loop halt` (KILL file), `loop flatten` (halt, then close everything on the next tick), `loop resume` (clears KILL and every sticky halt), `loop status` (controls, heartbeats, open positions, recent alerts).
+
+**Phase 3 exit check.** The spec asks for 2 weeks of real paper trading; that needs your machine and market hours. `tests/test_fast_loop.py::test_two_weeks_of_paper_trading_reconcile_with_a_forced_restart` replays 10 synthetic sessions through the real executor, broker and watchdog. It uses 5-minute ticks, events arriving live, and intraday quotes drawn from each day's bar. It kills the executor right after the broker accepts an order, before the executor records it. The run ends with:
+
+- 11 entries; 33 signals refused by the 3-per-strategy cap
+- 9 time exits, 1 stop, 1 position still open
+- zero watchdog findings: reconciled every tick, no limit violations
+- zero duplicate orders, and the crash's order adopted on restart
 
 ## Needed from you before real data
 

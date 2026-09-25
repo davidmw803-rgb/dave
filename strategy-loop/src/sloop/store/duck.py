@@ -23,6 +23,20 @@ def connect(path: str | Path | None = None) -> duckdb.DuckDBPyConnection:
     return con
 
 
+def connect_retry(path: str | Path | None = None, wait_seconds: float = 120) -> duckdb.DuckDBPyConnection:
+    """Open the ledger, waiting while another process (a long analyzer run) holds the write lock."""
+    import time
+
+    deadline = time.monotonic() + wait_seconds
+    while True:
+        try:
+            return connect(path)
+        except duckdb.IOException:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(2)
+
+
 def now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -39,6 +53,17 @@ def upsert_df(con: duckdb.DuckDBPyConnection, table: str, df: pd.DataFrame) -> i
     cols = ", ".join(f'"{c}"' for c in df.columns)
     con.execute(f"INSERT OR REPLACE INTO {table} ({cols}) SELECT {cols} FROM _upsert")
     con.unregister("_upsert")
+    return len(df)
+
+
+def insert_df(con: duckdb.DuckDBPyConnection, table: str, df: pd.DataFrame) -> int:
+    """Plain insert by column name (for tables without a single conflict target)."""
+    if df.empty:
+        return 0
+    con.register("_insert", df)
+    cols = ", ".join(f'"{c}"' for c in df.columns)
+    con.execute(f"INSERT INTO {table} ({cols}) SELECT {cols} FROM _insert")
+    con.unregister("_insert")
     return len(df)
 
 

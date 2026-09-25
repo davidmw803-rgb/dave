@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import xml.etree.ElementTree as ET_XML
 from datetime import datetime, time, timezone
 from zoneinfo import ZoneInfo
 
@@ -60,6 +62,51 @@ def parse_form_index(text: str) -> pd.DataFrame:
     return pd.DataFrame(recs)
 
 
+def accession(path_or_id: str) -> str:
+    """Accession number (0001234567-24-000001) from an index path, URL or feed id."""
+    m = re.search(r"(\d{10}-\d{2}-\d{6})", path_or_id)
+    return m.group(1) if m else path_or_id
+
+
+def parse_current_feed(xml: str, tickers: dict[int, str]) -> pd.DataFrame:
+    """EDGAR 'getcurrent' Atom feed -> events stamped with the acceptance time.
+
+    Form 4 appears once per reporting owner and once for the issuer; the issuer
+    entry is kept so each filing becomes one event on the issuer's ticker.
+    """
+    ns = {"a": "http://www.w3.org/2005/Atom"}
+    root = ET_XML.fromstring(xml)
+    now = datetime.now(timezone.utc)
+    out = []
+    for e in root.findall("a:entry", ns):
+        title = (e.findtext("a:title", default="", namespaces=ns) or "").strip()
+        m = re.match(r"^(.+?) - (.+) \((\d{10})\) \((\w+)\)$", title)
+        if not m:
+            continue
+        form, company, cik, role = m.group(1).strip(), m.group(2), int(m.group(3)), m.group(4)
+        if form not in FORM_TYPES or (form == "4" and role != "Issuer"):
+            continue
+        t = tickers.get(cik)
+        acc = accession(e.findtext("a:id", default="", namespaces=ns) or "")
+        updated = e.findtext("a:updated", default="", namespaces=ns)
+        if not t or not updated or not acc:
+            continue
+        pub = datetime.fromisoformat(updated).astimezone(timezone.utc)
+        link = e.find("a:link", ns)
+        out.append({"event_id": event_id("edgar", acc), "source": "edgar", "source_id": acc, "type": FORM_TYPES[form],
+                    "ticker": t, "ts_published": pub, "ts_ingested": now,
+                    "payload_json": json.dumps({"form": form, "cik": cik, "company": company, "accession": acc,
+                                                "url": link.get("href") if link is not None else None,
+                                                "time_precision": "second"})})
+    return pd.DataFrame(out)
+
+
+def fetch_current(form: str, tickers: dict[int, str]) -> pd.DataFrame:
+    xml = http.get("https://www.sec.gov/cgi-bin/browse-edgar", headers=_headers(), min_interval=_interval(),
+                   params={"action": "getcurrent", "type": form, "owner": "include", "count": 100, "output": "atom"})
+    return parse_current_feed(xml.decode("utf-8", "replace"), tickers)
+
+
 def backfill_quarter(con: duckdb.DuckDBPyConnection, year: int, quarter: int, tickers: dict[int, str] | None = None) -> int:
     raw = http.get(f"https://www.sec.gov/Archives/edgar/full-index/{year}/QTR{quarter}/form.idx",
                    headers=_headers(), min_interval=_interval()).decode("latin-1")
@@ -73,7 +120,8 @@ def backfill_quarter(con: duckdb.DuckDBPyConnection, year: int, quarter: int, ti
         if not t:
             continue
         pub = datetime.combine(datetime.fromisoformat(r.date_filed).date(), LATE_STAMP, ET).astimezone(timezone.utc)
-        rows.append({"event_id": event_id("edgar", r.path), "source": "edgar", "source_id": r.path,
+        acc = accession(r.path)
+        rows.append({"event_id": event_id("edgar", acc), "source": "edgar", "source_id": acc,
                      "type": FORM_TYPES[r.form], "ticker": t, "ts_published": pub, "ts_ingested": now,
                      "payload_json": json.dumps({"form": r.form, "cik": r.cik, "company": r.company, "path": r.path,
                                                  "time_precision": "date"})})

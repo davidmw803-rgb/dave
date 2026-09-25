@@ -4,9 +4,12 @@
 sources:
   uw:
     latency_seconds: 120
+    poll_seconds: 60
     expected_interval_minutes: 30     # watchdog staleness threshold (market hours)
   edgar:
     latency_seconds: 60
+    poll_seconds: 60
+    live_forms: ["8-K", "4", "SC 13D"]
     expected_interval_minutes: 60
     max_requests_per_second: 8        # SEC fair access: <= 10 req/s
   usaspending:
