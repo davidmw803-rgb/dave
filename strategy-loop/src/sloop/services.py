@@ -60,10 +60,19 @@ def serve(name: str) -> None:
         def adv(t):
             r = hot.one(con, "SELECT avg_dollar_vol_20d FROM refdata WHERE ticker = ?", [t])
             return r["avg_dollar_vol_20d"] if r else None
-        ex = Executor(con, broker, quote_source(adv))
+        try:
+            ex = Executor(con, broker, quote_source(adv))
+        except RuntimeError as e:
+            # Idle (heartbeating) rather than crash-loop under the supervisor.
+            from sloop.watchdog.alerts import alert
+            alert(con, "executor_no_quotes", f"executor idle: {e}", "error")
+            ex = None
         mh = config.load("schedule")["market_hours"]
 
         def step():
+            if ex is None:
+                hot.heartbeat(con, "executor", "no_quote_source")
+                return "idle"
             if clock.within(clock.Clock().et(), [mh["start"], mh["end"]]):
                 return ex.tick()
             hot.heartbeat(con, "executor", "idle")

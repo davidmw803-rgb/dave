@@ -23,9 +23,16 @@ def connect(path: str | Path | None = None) -> duckdb.DuckDBPyConnection:
     return con
 
 
-def connect_retry(path: str | Path | None = None, wait_seconds: float = 120) -> duckdb.DuckDBPyConnection:
-    """Open the ledger, waiting while another process (a long analyzer run) holds the write lock."""
+def connect_retry(path: str | Path | None = None, wait_seconds: float | None = None) -> duckdb.DuckDBPyConnection:
+    """Open the ledger, waiting while another process (a long analyzer run) holds the write lock.
+
+    Waits ``wait_seconds``, else $LOOP_DUCK_WAIT, else 120 s.
+    """
+    import os
     import time
+
+    if wait_seconds is None:
+        wait_seconds = float(os.environ.get("LOOP_DUCK_WAIT", 120))
 
     deadline = time.monotonic() + wait_seconds
     while True:

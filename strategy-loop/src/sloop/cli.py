@@ -23,7 +23,27 @@ def _print(obj) -> None:
         print(json.dumps(obj, indent=2, default=str))
 
 
+def load_dotenv(path: Path | None = None) -> None:
+    """Read KEY=VALUE lines from strategy-loop/.env into the environment (existing vars win)."""
+    from sloop import config as _cfg
+
+    p = path or _cfg.ROOT / ".env"
+    if not p.exists():
+        return
+    for line in p.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        v = v.strip()
+        if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+            v = v[1:-1]
+        if v:
+            os.environ.setdefault(k.strip(), v)
+
+
 def main(argv: list[str] | None = None) -> int:
+    load_dotenv()
     p = argparse.ArgumentParser(prog="loop")
     p.add_argument("--db", help="DuckDB path (default: data/loop.duckdb)")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -71,6 +91,16 @@ def main(argv: list[str] | None = None) -> int:
     bk.add_argument("dest", nargs="?", default=None)
     sub.add_parser("flatten", help="halt entries and close every paper position on the executor's next tick")
 
+    jb = sub.add_parser("job", help="run a scheduled job if the ET clock says it is due (what launchd/systemd call)")
+    jb.add_argument("name"); jb.add_argument("--force", action="store_true", help="run now regardless of the schedule")
+    ins = sub.add_parser("install", help="write and load launchd agents (macOS) or systemd user units (Linux)")
+    ins.add_argument("--platform", choices=["macos", "linux"], help="default: this machine's")
+    ins.add_argument("--dry-run", action="store_true", help="write units to --out (or print the plan) without loading them")
+    ins.add_argument("--out", help="directory to write units into (default: the platform's user unit directory)")
+    ins.add_argument("--uninstall", action="store_true")
+    sub.add_parser("jobs", help="list the schedule and when each job last ran")
+    sub.add_parser("roll-holdout", help="quarterly: move holdout_start to today minus 12 months")
+
     sub.add_parser("halt", help="stop new orders immediately (touch KILL)")
     sub.add_parser("resume", help="clear KILL")
     sub.add_parser("status")
@@ -83,6 +113,10 @@ def main(argv: list[str] | None = None) -> int:
         orders.kill_file().touch()
         print(f"halted: {orders.kill_file()} exists; no new orders will be placed")
         return 0
+    if a.cmd == "job":
+        return _job(a.name, a.force, a.db)
+    if a.cmd in ("install", "jobs"):
+        return _install(a) if a.cmd == "install" else _jobs()
     if a.cmd == "serve":
         from sloop import services
         services.serve(a.name)
@@ -108,6 +142,9 @@ def main(argv: list[str] | None = None) -> int:
         _print(ops.eod(hcon, con, date.fromisoformat(a.day) if a.day else None))
     elif a.cmd == "wakeups":
         _print(ops.drain_wakeups(hcon, con, a.backend))
+    elif a.cmd == "roll-holdout":
+        from sloop.harness import holdout
+        print(f"holdout_start = {holdout.roll(con)}")
     elif a.cmd == "backup":
         from sloop import config as cfg, ops as ops_
         _print(str(ops_.backup(con, a.dest or cfg.data_dir() / "backups")))
@@ -191,6 +228,70 @@ def main(argv: list[str] | None = None) -> int:
     elif a.cmd == "coverage":
         from sloop.coverage import map as cov
         _print(cov.summary(con))
+    return 0
+
+
+def _job(name: str, force: bool, db: str | None) -> int:
+    """Scheduler entry point. Runs the job's command in-process if due; records the ET date it ran."""
+    import shlex
+    from datetime import datetime
+
+    from sloop import clock, config, scheduler
+    from sloop.store import hot
+
+    job = scheduler.get(name)
+    h = hot.connect()
+    key = f"job:{name}"
+    now_et = clock.Clock().et()
+    run, why = (True, "forced") if force else scheduler.due(job, now_et, hot.get_cursor(h, key) or None)
+    stamp = datetime.now().isoformat(timespec="seconds")
+    if not run:
+        print(f"{stamp} job {name}: skip ({why})")
+        return 0
+    os.environ.setdefault("LOOP_DUCK_WAIT", str(config.load("schedule")["job_ledger_wait_seconds"]))
+    print(f"{stamp} job {name}: run `loop {job.cmd}`", flush=True)
+    rc = main((["--db", db] if db else []) + shlex.split(job.cmd))
+    if rc == 0 and job.at:
+        hot.set_cursor(h, key, now_et.date().isoformat())
+    hot.set_cursor(h, f"{key}:last", f"{now_et.isoformat(timespec='seconds')} rc={rc}")
+    print(f"{datetime.now().isoformat(timespec='seconds')} job {name}: exit {rc}")
+    return rc
+
+
+def _jobs() -> int:
+    from sloop import scheduler
+    from sloop.store import hot
+
+    h = hot.connect()
+    rows = []
+    for j in scheduler.jobs(include_disabled=True):
+        enabled = j in scheduler.jobs()
+        when = f"{j.at} ET" if j.at else f"every {j.every_minutes} min {j.window[0]}-{j.window[1]} ET"
+        rows.append({"job": j.name, "enabled": enabled, "when": when, "cmd": f"loop {j.cmd}",
+                     "last": hot.get_cursor(h, f"job:{j.name}:last") or "-"})
+    _print(pd.DataFrame(rows))
+    return 0
+
+
+def _install(a) -> int:
+    from sloop import scheduler
+
+    platform = a.platform or scheduler.detect_platform()
+    out = Path(a.out) if a.out else None
+    if a.uninstall:
+        cmds = scheduler.uninstall(platform, out, load=not a.dry_run)
+    else:
+        if a.dry_run and out is None:
+            units = scheduler.launchd_units() if platform == "macos" else scheduler.systemd_units()
+            print(f"would write {len(units)} units to {scheduler.target_dir(platform)}:")
+            for n in units:
+                print(f"  {n}")
+            return 0
+        cmds = scheduler.install(platform, out, load=not a.dry_run)
+        print(f"wrote units to {out or scheduler.target_dir(platform)}")
+    print(("commands to run:" if a.dry_run else "ran:") + "\n  " + "\n  ".join(cmds))
+    if platform == "linux" and not a.dry_run and not a.uninstall:
+        print("note: run `sudo loginctl enable-linger $USER` once so services keep running while you're logged out")
     return 0
 
 

@@ -19,7 +19,7 @@ cd strategy-loop
 pip install -e '.[dev]'
 loop demo            # synthetic market: harness self-test (about 20 s)
 loop simulate --start 2026-09-01 --days 5 --backend fake --placebos 10   # after demo: Phase 2 exit check
-pytest -q            # 76 tests
+pytest -q            # 95 tests
 ```
 
 `loop demo` builds a synthetic market with three planted event types and checks that the harness grades each one correctly:
@@ -50,6 +50,7 @@ src/sloop/
   watchdog/      service.py (heartbeats, staleness), reconcile.py, alerts.py
   services.py    `loop serve ingest|executor|watchdog`
   ops.py         flush, eod, wakeups, backup
+  scheduler.py   job guard + launchd/systemd unit generation (`loop install`, `loop job`)
   clock.py       NYSE calendar (config/market_calendar.yaml)
   agents/        llm.py (claude_code | api | fake), context.py (what each agent sees),
                  orchestrator.py, researcher.py, analyzer.py, feedback.py, tasks.py, cycle.py, fake.py
@@ -191,6 +192,118 @@ Alerts go to the `alerts` table, `data/alerts.log`, and a POST to `LOOP_ALERT_WE
 - 9 time exits, 1 stop, 1 position still open
 - zero watchdog findings: reconciled every tick, no limit violations
 - zero duplicate orders, and the crash's order adopted on restart
+
+## Setting up the host machine
+
+One machine runs everything: three always-on services and the scheduled jobs. It must be awake from 09:25 to 16:05 ET on trading days; ingestion and the watchdog run around the clock.
+
+### 1. Install
+
+```bash
+git clone https://github.com/davidmw803-rgb/dave.git && cd dave/strategy-loop
+python3 -m venv .venv && . .venv/bin/activate      # Python 3.11+
+pip install -e '.[dev]'                            # add '.[api]' for the API backend
+pytest -q                                          # should pass before going further
+cp .env.example .env && chmod 600 .env             # then fill it in (below)
+```
+
+The unit files point at this checkout and at the Python that ran `loop install`, so install from inside the venv.
+
+### 2. Fill in `.env`
+
+Every `loop` command reads it, including the ones launchd/systemd start. Nothing secret goes into the unit files.
+
+| Variable | Needed for |
+|---|---|
+| `UW_API_KEY` | ingestion (analyst ratings), executor quotes, EOD bars. Without it the executor idles and alerts |
+| `SEC_USER_AGENT` | EDGAR ingestion: `"Your Name you@example.com"` |
+| `LLM_BACKEND` | `claude_code` (default) or `api` |
+| `ANTHROPIC_API_KEY` | only with `LLM_BACKEND=api` |
+| `LOOP_ALERT_WEBHOOK` | push alerts (e.g. `https://ntfy.sh/<private-topic>`, then subscribe in the ntfy app) |
+
+With `claude_code`, run `claude` once interactively as the same user to log in. The agents then run under your Claude plan. `loop install` records your current `PATH` so the scheduler can find `claude`.
+
+### 3. Seed data and a first cycle
+
+```bash
+loop init                                   # store + coverage map
+loop import-prices prices.parquet           # vendor history (see "Needed from you")
+loop import-universe universe.parquet
+loop ingest-uw --since 2019-01-01           # backfills
+loop ingest-edgar 2025 1                    # one quarter per call
+loop regimes && loop eod                    # regimes, refdata for the executor
+loop run-cycle --backend fake --placebos 20 # dry run of the slow loop, no model calls
+loop audit
+```
+
+### 4. Keep it awake
+
+**macOS**
+
+- `sudo pmset -a sleep 0 disksleep 0 standby 0 autopoweroff 0`, or System Settings → Energy → "Prevent automatic sleeping". The display can still sleep.
+- LaunchAgents run only while you're logged in. To come back unattended after a power cut, enable automatic login (System Settings → Users & Groups) and run `sudo pmset -a autorestart 1`. macOS doesn't allow automatic login with FileVault on; if you keep FileVault, someone has to log in after a restart.
+
+**Linux**
+
+- `sudo systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target`
+- `sudo loginctl enable-linger $USER`, so user services run without an open login session.
+
+**Both:** a small UPS is worth it. If the machine goes down with positions open, remember that `paper_sim` can only trigger stops while the executor is running. The watchdog alerts on restart and the executor reconciles.
+
+### 5. Install the services and schedule
+
+```bash
+loop install --dry-run          # list the units it would write
+loop install                    # write + load (macOS: ~/Library/LaunchAgents, Linux: ~/.config/systemd/user)
+loop jobs                       # schedule + last run of each job
+loop status                     # heartbeats, controls, open positions, alerts
+```
+
+**Services** (restarted on exit):
+
+| Service | Runs |
+|---|---|
+| `serve ingest` | 24/7 |
+| `serve executor` | always up; trades only 09:25–16:05 ET on trading days |
+| `serve watchdog` | 24/7, every minute |
+
+**Jobs** (ET, from `config/schedule.yaml` `jobs:`):
+
+| Job | When |
+|---|---|
+| `step orchestrator` | 07:00 weekdays |
+| `step researcher` | 07:30 weekdays |
+| `step analyzer` | 08:00 weekdays |
+| `wakeups` | every 10 min, 09:30–16:00 on trading days |
+| `flush` | every 30 min |
+| `eod` | 16:30 on trading days |
+| `backup` | 23:00 daily |
+| `run-cycle` | Saturday 09:00 (extended research, weekend call cap of 20) |
+| `roll-holdout` | 06:00 on Jan/Apr/Jul/Oct 1 |
+
+The evaluator (06:30) and the daily report (17:00) are listed but disabled until Phase 4.
+
+**How timing works on any host timezone.** launchd can't take a timezone, so each job's plist fires at every local time its ET slot can map to (both sides of DST). systemd timers carry `America/New_York` directly. Either way the unit calls `loop job <name>`, which:
+
+- runs only when the ET clock says the job is due;
+- runs each daily job once per ET date;
+- still runs a job missed while asleep if the machine wakes within 45 minutes;
+- skips market-only jobs on NYSE holidays (`config/market_calendar.yaml`, which needs extending each December).
+
+Jobs that find the ledger locked by a long analyzer run wait up to 30 min (`job_ledger_wait_seconds`).
+
+**Logs** are in `data/logs/<unit>.log` on macOS, and `journalctl --user -u sloop-<name>` on Linux. Alerts also go to `data/alerts.log`.
+
+**Changing the schedule, updating the code, or moving the checkout:** edit `config/schedule.yaml` or pull, then re-run `loop install`. It rewrites every unit and unloads retired ones. `loop install --uninstall` removes everything.
+
+**Backups:** `loop backup [dest]` writes parquet for every ledger table plus a copy of the hot store to `data/backups/<date>/` and keeps 14 days. Point `dest` at a second disk or a synced folder (§14).
+
+### 6. Daily operation
+
+- **Halt new orders:** `loop halt`.
+- **Close everything:** `loop flatten`. It halts, then sells every paper position on the executor's next tick.
+- **Resume:** `loop resume` clears KILL and any sticky halt: weekly loss, reconciliation, flatten.
+- **Promote to real money:** there is still no live broker, so an approval to `live_small` only makes the executor skip that strategy's signals and alert. `loop approve <strategy_id> --to live_small` stays the only command that can change a strategy's state above paper.
 
 ## Needed from you before real data
 
