@@ -68,3 +68,32 @@ def backfill_analysts(con: duckdb.DuckDBPyConnection, newer_than: str, older_tha
             break
         cursor = oldest
     return written
+
+
+def daily_bars(ticker: str, limit: int = 60) -> pd.DataFrame:
+    """Recent daily OHLCV from /api/stock/{ticker}/ohlc/1d (raw prices; adj_close = close)."""
+    body = http.get_json(f"{_base()}/api/stock/{ticker}/ohlc/1d", headers=_headers(), params={"limit": limit})
+    rows = []
+    for b in body.get("data") or []:
+        try:
+            rows.append({"ticker": ticker.upper(), "date": pd.Timestamp(b["date"]).date(), "open": float(b["open"]),
+                         "high": float(b["high"]), "low": float(b["low"]), "close": float(b["close"]),
+                         "volume": float(b.get("total_volume") or b.get("volume") or 0), "adj_close": float(b["close"])})
+        except (KeyError, TypeError, ValueError):
+            continue
+    return pd.DataFrame(rows)
+
+
+def info_snapshot(ticker: str, day) -> dict | None:
+    """Today's sector and market cap from /api/stock/{ticker}/info, as a universe_pit row for ``day``.
+
+    A snapshot taken today is point-in-time for everything after today, so the
+    live universe accumulates correctly even before a vendor history exists.
+    """
+    body = http.get_json(f"{_base()}/api/stock/{ticker}/info", headers=_headers())
+    d = body.get("data") or {}
+    try:
+        mcap = float(d["marketcap"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return {"ticker": ticker.upper(), "date": day, "mcap": mcap, "sector": d.get("sector"), "industry": None, "listed": True}

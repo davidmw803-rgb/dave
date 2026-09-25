@@ -20,3 +20,21 @@ account:
   pdt_applies: true
   pdt_min_equity: 25000
   pdt_max_day_trades_5d: 3
+
+executor:
+  # Phase 3 is paper only. There is no live broker in this codebase; strategies
+  # David approves to live_small/live are skipped with an alert until one exists.
+  broker: paper_sim
+  paper_equity: 100000           # open question §18: account size
+  default_stop_atr_mult: 3.0     # protective stop when a strategy defines none (sizing needs a stop)
+  quote_max_age_seconds: 120     # older quotes are treated as missing
+  # Entries happen when the harness assumed they would, so paper results stay
+  # comparable to the backtest: pre-open events at the open, intraday events
+  # near the close, late events at the next open.
+  open_entry_window: ["09:30", "09:45"]
+  close_entry_window: ["15:45", "15:55"]
+  time_exit_at: "15:50"          # positions past max_hold_days are sold then
+watchdog:
+  heartbeat_max_age_seconds: 180
+  reconcile_mismatches_to_halt: 2   # consecutive checks, one minute apart
+  alert_dedupe_minutes: 60
