@@ -26,6 +26,13 @@ def compute(con: duckdb.DuckDBPyConnection, vix: str = "VIX", spy: str = "SPY", 
     out = pd.DataFrame(index=wide.index)
     if vix in wide:
         v = wide[vix]
+    elif spy in wide:
+        # No VIX series (e.g. Sharadar has no indices): SPY's 20-day realized
+        # volatility, annualized in VIX points, stands in. Same buckets.
+        v = np.log(wide[spy]).diff().rolling(20, min_periods=15).std() * np.sqrt(252) * 100
+    else:
+        v = None
+    if v is not None:
         out["vix_bucket"] = pd.cut(v, [-np.inf, 15, 25, np.inf], labels=["vix_low", "vix_mid", "vix_high"], right=False).astype(object)
     else:
         out["vix_bucket"] = None

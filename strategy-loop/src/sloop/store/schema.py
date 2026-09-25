@@ -100,5 +100,10 @@ ALTER TABLE positions ADD COLUMN IF NOT EXISTS take_profit DOUBLE;
 ALTER TABLE positions ADD COLUMN IF NOT EXISTS max_exit_date DATE;
 ALTER TABLE positions ADD COLUMN IF NOT EXISTS exit_price DOUBLE;
 ALTER TABLE positions ADD COLUMN IF NOT EXISTS exit_reason VARCHAR;
+CREATE TABLE IF NOT EXISTS securities (
+  ticker VARCHAR PRIMARY KEY, vendor VARCHAR, vendor_id VARCHAR, name VARCHAR, category VARCHAR,
+  exchange VARCHAR, sector VARCHAR, industry VARCHAR, is_fund BOOLEAN, delisted BOOLEAN,
+  first_date DATE, last_date DATE, updated_at TIMESTAMPTZ
+);
 INSERT INTO trial_counter VALUES (1, 0) ON CONFLICT DO NOTHING;
 """
