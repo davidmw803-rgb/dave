@@ -1,14 +1,24 @@
 timezone: America/New_York
 market_hours: {start: "09:25", end: "16:05"}
 fast_loop_seconds: 45
-steps:
-  evaluator: "06:30"
-  orchestrator: "07:00"
-  researcher: "07:30"
-  analyzer: "08:00"
-  eod: "16:30"
-  daily_report: "17:00"
-weekly: {day: saturday}
+# Slow-loop jobs (§4). Times are ET. `loop install` turns these into launchd
+# agents / systemd timers that call `loop job <name>`, which runs the command
+# only when the ET clock matches (DST-safe on any host timezone) and at most
+# once per day for `at` jobs. Jobs from later phases are listed but disabled.
+jobs:
+  evaluator:     {cmd: "step evaluator",    at: "06:30", days: weekdays, enabled: false}   # Phase 4
+  orchestrator:  {cmd: "step orchestrator", at: "07:00", days: weekdays}
+  researcher:    {cmd: "step researcher",   at: "07:30", days: weekdays}
+  analyzer:      {cmd: "step analyzer",     at: "08:00", days: weekdays}
+  wakeups:       {cmd: "wakeups",           every_minutes: 10, window: ["09:30", "16:00"], days: weekdays, trading_day: true}
+  flush:         {cmd: "flush",             every_minutes: 30, window: ["00:00", "23:59"], days: all}
+  eod:           {cmd: "eod",               at: "16:30", days: weekdays, trading_day: true}
+  daily_report:  {cmd: "report daily",      at: "17:00", days: weekdays, enabled: false}   # Phase 4
+  backup:        {cmd: "backup",            at: "23:00", days: all}
+  weekly_research: {cmd: "run-cycle",       at: "09:00", days: [saturday]}   # extended research, weekend call cap
+  holdout_roll:  {cmd: "roll-holdout",      at: "06:00", days: all, months: [1, 4, 7, 10], day_of_month: 1}
+# How long a scheduled job waits for the ledger while another job holds it.
+job_ledger_wait_seconds: 1800
 llm:
   max_scheduled_calls_per_weekday: 6
   max_scheduled_calls_weekend: 20   # Saturday extended research
