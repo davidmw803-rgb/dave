@@ -34,9 +34,26 @@ from sloop.store.duck import new_id, now
 M = TypeVar("M", bound=BaseModel)
 
 PROMPTS_DIR = config.ROOT / "prompts"
-API_MODELS = {"opus": "claude-opus-5", "sonnet": "claude-sonnet-5", "haiku": "claude-haiku-4-5"}
-# $ per million tokens (input, output). Cache reads bill at ~0.1x input, writes at 1.25x.
-PRICES = {"claude-opus-5": (5.0, 25.0), "claude-sonnet-5": (2.0, 10.0), "claude-haiku-4-5": (1.0, 5.0)}
+# Short names still accepted in config; they resolve to current model IDs.
+API_MODELS = {"opus": "claude-opus-5-5", "sonnet": "claude-sonnet-5", "haiku": "claude-haiku-4-5-20251001"}
+# $ per million tokens: (input, output, cache-read multiplier). 5-minute cache writes bill at 1.25x input.
+# Source: platform.claude.com/docs/en/about-claude/pricing (2026-09-25).
+PRICES = {
+    "claude-opus-5-5": (4.0, 20.0, 0.05),
+    "claude-opus-5": (5.0, 25.0, 0.10),
+    "claude-sonnet-5": (2.0, 10.0, 0.10),
+    "claude-haiku-4-5-20251001": (1.0, 5.0, 0.10),
+    "claude-haiku-4-5": (1.0, 5.0, 0.10),
+}
+_UNKNOWN_PRICE = (10.0, 50.0, 0.10)  # price an unrecognised model at the top tier so budgets err safe
+
+
+def resolve_model(name: str) -> str:
+    return API_MODELS.get(name, name)
+
+
+def price(model_id: str) -> tuple[float, float, float]:
+    return PRICES.get(model_id, _UNKNOWN_PRICE)
 # Environment variables never passed to the headless CLI.
 _SECRET_ENV = ("UW_API_KEY", "WEBULL_APP_KEY", "WEBULL_APP_SECRET", "SEC_USER_AGENT", "LOOP_ALERT_WEBHOOK")
 TRIGGERED_ROLES = {"researcher_wakeup"}
@@ -127,7 +144,7 @@ def _api(model: str, system: str, prompt: str, effort: str) -> tuple[str, int, i
     import anthropic  # optional dependency: pip install '.[api]'
 
     client = anthropic.Anthropic()
-    model_id = API_MODELS.get(model, model)
+    model_id = resolve_model(model)
     kwargs: dict[str, Any] = dict(
         model=model_id, max_tokens=16000,
         system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
@@ -147,8 +164,9 @@ def _api(model: str, system: str, prompt: str, effort: str) -> tuple[str, int, i
     u = msg.usage
     cache_read = getattr(u, "cache_read_input_tokens", 0) or 0
     cache_write = getattr(u, "cache_creation_input_tokens", 0) or 0
-    pin, pout = PRICES.get(msg.model, PRICES.get(model_id, (5.0, 25.0)))
-    cost = (u.input_tokens * pin + cache_read * pin * 0.1 + cache_write * pin * 1.25 + u.output_tokens * pout) / 1e6
+    # msg.model is the model that actually served the request (a fallback may differ).
+    pin, pout, cread = price(msg.model) if msg.model in PRICES else price(model_id)
+    cost = (u.input_tokens * pin + cache_read * pin * cread + cache_write * pin * 1.25 + u.output_tokens * pout) / 1e6
     text = "".join(b.text for b in msg.content if b.type == "text")
     return text, u.input_tokens + cache_read + cache_write, u.output_tokens, cost
 
@@ -168,7 +186,7 @@ def run(con: duckdb.DuckDBPyConnection, role: str, prompt_name: str, context: di
     day = day or date.today()
     check_budget(con, role, day)
     llm = config.load("schedule")["llm"]
-    model = llm["models"].get(role, "sonnet")
+    model = resolve_model(llm["models"].get(role, "claude-sonnet-5"))
     effort = llm.get("effort", {}).get(role, "high")
     system, version = load_prompt(prompt_name)
     instructions = ("\n\nRespond with a single JSON object matching this JSON schema, and nothing else:\n"

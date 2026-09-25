@@ -34,11 +34,13 @@ llm:
     analyzer_findings: medium
     evaluator: high
     lessons: medium
+  # Exact Claude API model IDs (checked against platform.claude.com models
+  # overview, 2026-09-25). Both backends pass these through unchanged.
   models:
-    orchestrator: opus
-    researcher: sonnet
-    researcher_bulk: haiku
-    analyzer: sonnet
-    analyzer_findings: sonnet
-    researcher_wakeup: sonnet
-    evaluator: sonnet
+    orchestrator: claude-opus-5-5
+    researcher: claude-sonnet-5
+    researcher_bulk: claude-haiku-4-5-20251001   # retirement not before 2026-10-15; unused so far
+    analyzer: claude-sonnet-5
+    analyzer_findings: claude-sonnet-5
+    researcher_wakeup: claude-sonnet-5
+    evaluator: claude-sonnet-5

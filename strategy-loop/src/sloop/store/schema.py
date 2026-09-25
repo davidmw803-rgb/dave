@@ -106,5 +106,10 @@ ALTER TABLE evaluations ADD COLUMN IF NOT EXISTS prompt_version VARCHAR;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS strategy_id VARCHAR;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS ticker VARCHAR;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS position_id VARCHAR;
+CREATE TABLE IF NOT EXISTS securities (
+  ticker VARCHAR PRIMARY KEY, vendor VARCHAR, vendor_id VARCHAR, name VARCHAR, category VARCHAR,
+  exchange VARCHAR, sector VARCHAR, industry VARCHAR, is_fund BOOLEAN, delisted BOOLEAN,
+  first_date DATE, last_date DATE, updated_at TIMESTAMPTZ
+);
 INSERT INTO trial_counter VALUES (1, 0) ON CONFLICT DO NOTHING;
 """
