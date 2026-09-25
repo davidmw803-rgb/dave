@@ -33,7 +33,16 @@ def eod(hcon: sqlite3.Connection, con: duckdb.DuckDBPyConnection, day: date | No
 
     day = day or datetime.now(clock.ET).date()
     out = {"flush": flush(hcon, con)}
-    if os.environ.get("UW_API_KEY"):
+    from sloop.ingest.vendors.base import VendorNotConfigured, get_vendor, sync as vendor_sync
+    try:
+        vendor = get_vendor()
+    except VendorNotConfigured:
+        vendor = None
+    if vendor is not None:
+        # The vendor is the source of record for bars and the point-in-time universe.
+        lookback = config.load("sources")["vendor"]["eod_lookback_days"]
+        out["vendor"] = vendor_sync(con, vendor, day - timedelta(days=lookback), day)
+    elif os.environ.get("UW_API_KEY"):
         from sloop.ingest import prices, uw
 
         since = datetime.now(timezone.utc) - timedelta(days=45)

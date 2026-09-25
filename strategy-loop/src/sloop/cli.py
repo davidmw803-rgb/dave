@@ -56,6 +56,12 @@ def main(argv: list[str] | None = None) -> int:
     iu = sub.add_parser("import-universe"); iu.add_argument("path")
     uw = sub.add_parser("ingest-uw", help="backfill UW analyst ratings")
     uw.add_argument("--since", required=True); uw.add_argument("--until"); uw.add_argument("--action")
+    vd = sub.add_parser("vendor", help="price + point-in-time universe vendor (Sharadar)")
+    vd.add_argument("action", choices=["check", "sync"])
+    vd.add_argument("--vendor", help="default: sources.yaml vendor.name")
+    vd.add_argument("--start", help="sync: first date (YYYY-MM-DD)")
+    vd.add_argument("--end", help="sync: last date (default today)")
+    vd.add_argument("--tickers", help="sync: comma-separated subset (default: whole research universe)")
     ed = sub.add_parser("ingest-edgar", help="backfill one EDGAR quarter")
     ed.add_argument("year", type=int); ed.add_argument("quarter", type=int)
 
@@ -165,6 +171,24 @@ def main(argv: list[str] | None = None) -> int:
     elif a.cmd == "ingest-uw":
         from sloop.ingest import uw
         print(f"events: {uw.backfill_analysts(con, a.since, a.until, a.action)}")
+    elif a.cmd == "vendor":
+        from sloop.ingest.vendors.base import VendorNotConfigured, get_vendor, sync
+        try:
+            v = get_vendor(a.vendor)
+        except VendorNotConfigured as e:
+            print(f"vendor not configured: {e}")
+            return 2
+        if a.action == "check":
+            _print(v.ping())
+        else:
+            if not a.start:
+                print("sync needs --start")
+                return 2
+            end = date.fromisoformat(a.end) if a.end else date.today()
+            tickers = [t.strip().upper() for t in a.tickers.split(",")] if a.tickers else None
+            _print(sync(con, v, date.fromisoformat(a.start), end, tickers))
+            from sloop.harness import regimes
+            regimes.compute(con)
     elif a.cmd == "ingest-edgar":
         from sloop.ingest import edgar
         print(f"events: {edgar.backfill_quarter(con, a.year, a.quarter)}")

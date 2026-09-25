@@ -20,3 +20,20 @@ sources:
     expected_interval_minutes: 1440
 # ts_ingested more than this long after ts_published marks a backfilled row.
 backfill_threshold_hours: 24
+
+# Price + point-in-time universe vendor (`loop vendor ...`, and the EOD job when set).
+vendor:
+  name: sharadar                 # sharadar | none
+  api_key_env: NASDAQ_DATA_LINK_API_KEY
+  # Security categories kept in the research universe (delisted names included).
+  equity_categories_prefix: ["Domestic Common Stock"]
+  # Universe snapshots are point-in-time rows the harness reads "as of the last
+  # row before the decision day". Weekly keeps the table ~5x smaller than daily.
+  universe_snapshot: weekly      # weekly | daily
+  eod_lookback_days: 10          # EOD job re-pulls this many days (vendor revisions)
+  sharadar:
+    base_url: https://data.nasdaq.com/api/v3/datatables/SHARADAR
+    page_rows: 10000
+    ticker_chunk: 100
+    # DAILY.marketcap units. "auto" detects millions vs dollars from the data.
+    marketcap_unit: auto

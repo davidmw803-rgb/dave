@@ -227,8 +227,7 @@ With `claude_code`, run `claude` once interactively as the same user to log in. 
 
 ```bash
 loop init                                   # store + coverage map
-loop import-prices prices.parquet           # vendor history (see "Needed from you")
-loop import-universe universe.parquet
+loop vendor check && loop vendor sync --start 2018-01-01   # prices + point-in-time universe (Sharadar)
 loop ingest-uw --since 2019-01-01           # backfills
 loop ingest-edgar 2025 1                    # one quarter per call
 loop regimes && loop eod                    # regimes, refdata for the executor
@@ -305,9 +304,44 @@ Jobs that find the ledger locked by a long analyzer run wait up to 30 min (`job_
 - **Resume:** `loop resume` clears KILL and any sticky halt: weekly loss, reconciliation, flatten.
 - **Promote to real money:** there is still no live broker, so an approval to `live_small` only makes the executor skip that strategy's signals and alert. `loop approve <strategy_id> --to live_small` stays the only command that can change a strategy's state above paper.
 
+## Price and universe vendor
+
+`ingest/vendors/` defines a vendor interface; `base.sync` turns any vendor's output into point-in-time ledger rows. A vendor supplies three frames:
+
+- **securities:** every ticker ever listed, delisted names included;
+- **as-traded daily bars** plus a split- and dividend-adjusted close;
+- **daily market caps.**
+
+From these, `sync` writes:
+
+- `prices` for the research universe and the benchmark ETFs;
+- `universe_pit` snapshots (weekly by default): market cap as of the date, 20-day dollar volume through the date, sector, and whether the ticker was listed that day;
+- a `securities` table.
+
+**Sharadar** (Nasdaq Data Link, Core US Equities bundle) is the first adapter. Set `NASDAQ_DATA_LINK_API_KEY` in `.env`, then:
+
+```bash
+loop vendor check                       # one tiny request
+loop vendor sync --start 2018-01-01     # full backfill (plus regimes)
+```
+
+After that, `loop eod` re-pulls the last 10 days each evening. The adapter reads four tables:
+
+| Table | Used for |
+|---|---|
+| `TICKERS` | listing dates, `isdelisted`, category, sector. Sharadar sectors are mapped to GICS level 1 |
+| `SEP` / `SFP` | stock and fund bars. As-traded OHLCV is rebuilt from split-adjusted prices × `closeunadj/close`; `closeadj` becomes `adj_close` |
+| `DAILY` | market cap. The unit is auto-detected, or set with `vendor.sharadar.marketcap_unit` |
+
+**Known gaps:**
+
+- **Sector isn't historical.** Sharadar's sector is the latest classification, not a history; that's the one field in the universe that isn't point-in-time.
+- **No VIX.** Sharadar has no index data, so the regime labels use SPY's 20-day realized volatility in VIX points instead.
+- **Memory at full size.** The harness loads prices into memory. A full-universe history since 2018 (~7k tickers including delisted) is on the order of 1 GB, so run backtests on a machine with room for it. Narrowing `vendor.equity_categories_prefix` or syncing a later `--start` shrinks it.
+
 ## Needed from you before real data
 
-- **Price and universe source.** Point-in-time market cap and sector, including delisted names. `loop import-prices` and `loop import-universe` accept CSV/parquet until a vendor is chosen.
+- **A Nasdaq Data Link key with Sharadar Core US Equities** (`NASDAQ_DATA_LINK_API_KEY`), or another vendor behind the same interface. `loop import-prices` and `loop import-universe` still take CSV/parquet.
 - **`SEC_USER_AGENT` and `UW_API_KEY`** in `.env`. Then run `loop ingest-uw --since 2019-01-01` and `loop ingest-edgar 2024 1`.
 - **Phase 0 checks.** EDGAR's `company_tickers.json` covers current listings only, so delisted issuers need a vendor CIK→ticker map.
 - **Spec §18 open questions.**
