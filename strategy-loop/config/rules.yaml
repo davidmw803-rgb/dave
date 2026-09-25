@@ -29,6 +29,11 @@ paper_to_live_small:     # flagged to David, never automatic
 
 analyzer:
   max_variants_per_hypothesis: 12
+  max_hypotheses_per_cycle: 5    # batched into one planning and one findings call
+
+orchestrator:
+  max_research_tasks: 5
+  paper_allocation_pct: 10       # of paper account, per strategy promoted to paper
 
 nulls:
   n_placebos: 200

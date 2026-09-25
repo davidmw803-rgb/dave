@@ -84,8 +84,14 @@ def transition(con: duckdb.DuckDBPyConnection, hypothesis_id: str, to: str, acto
 
 def freeze_strategy(con: duckdb.DuckDBPyConnection, hypothesis_id: str, variant: dict[str, Any],
                     expected: dict[str, float], allocation_pct: float) -> str:
-    """Create the immutable executor config when a hypothesis reaches paper."""
-    hyp = get(con, hypothesis_id)["spec"]
+    """Create the immutable executor config when a hypothesis reaches paper.
+
+    The config is the hypothesis with the in-sample variant that passed, so the
+    executor trades exactly what was tested.
+    """
+    from sloop.harness.run import apply_variant  # local: harness imports ledger
+
+    hyp = apply_variant(get(con, hypothesis_id)["spec"], variant)
     sid = new_id("stg")
     cfg = StrategyConfig(
         strategy_id=sid, hypothesis_id=hypothesis_id, signal=hyp.signal,

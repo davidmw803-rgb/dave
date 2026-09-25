@@ -127,6 +127,9 @@ def backtest(con: duckdb.DuckDBPyConnection, hypothesis_id: str, variant: dict[s
     r["trial_counter"] = n_trials
     r["skips"] = dict(skips)
     r["raw_ar"] = {c: _f(tr[c].mean()) for c in tr.columns if c.startswith("ar_")} if not tr.empty else {}
+    # Recorded so an audit can prove no in-sample test touched the holdout.
+    r["holdout_start"] = str(hs)
+    r["max_exit_date"] = str(tr["exit_date"].max()) if not tr.empty else None
     details = {k: v for k, v in r.items() if k not in ("n_events", "n_dates", "mean_ar", "hit_rate", "p_clustered", "sharpe")}
     r["test_id"] = _persist(con, hypothesis_id, variant, "in", None, r, details)
 
@@ -151,7 +154,7 @@ def run_holdout(con: duckdb.DuckDBPyConnection, hypothesis_id: str, as_of: date 
     holdout.check_unused(con, rec["family_key"])
     best = con.execute(
         """SELECT test_id, variant_json, mean_ar FROM tests WHERE hypothesis_id = ? AND sample = 'in'
-           AND segment_key IS NULL AND passed ORDER BY run_at DESC LIMIT 1""", [hypothesis_id]).fetchone()
+           AND segment_key IS NULL AND passed ORDER BY mean_ar DESC LIMIT 1""", [hypothesis_id]).fetchone()
     if not best:
         raise ledger.LadderError(f"{hypothesis_id} has no passing in-sample test")
     variant = json.loads(best[1]) if isinstance(best[1], str) else best[1]

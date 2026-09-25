@@ -101,8 +101,11 @@ class ResearchTask(_Strict):
 
 
 class Revision(_Strict):
+    """A revision is a new child hypothesis; it starts again at proposed."""
+
     parent_id: str
     change: str = Field(max_length=1000)
+    hypothesis: Hypothesis
 
 
 class FeedbackItem(_Strict):
@@ -115,6 +118,8 @@ class FeedbackItem(_Strict):
 class OrchestratorPlan(_Strict):
     research_tasks: list[ResearchTask] = Field(default_factory=list)
     test_queue: list[str] = Field(default_factory=list)
+    # Backtested hypotheses whose family should spend its one holdout run now.
+    holdout_runs: list[str] = Field(default_factory=list)
     # Orchestrator may only promote holdout_passed -> paper. Higher rungs are human-gated.
     promotions: list[str] = Field(default_factory=list)
     kills: list[str] = Field(default_factory=list)
@@ -126,11 +131,27 @@ class ResearcherOutput(_Strict):
     hypotheses: list[Hypothesis] = Field(default_factory=list, max_length=5)
 
 
+class VariantPlan(_Strict):
+    hypothesis_id: str
+    # Overlays on the hypothesis ({"exit": {...}}, {"signal": {"filters": {...}}}, ...).
+    # Each one is a trial. Overlays may not change the family (event type or filter fields).
+    variants: list[dict[str, Any]] = Field(min_length=1, max_length=12)
+    rationale: str = Field(default="", max_length=1000)
+
+
+class AnalyzerPlan(_Strict):
+    plans: list[VariantPlan] = Field(default_factory=list)
+
+
 class AnalyzerFindings(_Strict):
     hypothesis_id: str
-    variants: list[dict[str, Any]] = Field(max_length=12)
     interpretation: str = Field(max_length=3000)
-    suspected_confounds: list[str] = Field(default_factory=list)
+    parameter_sensitivity: str = Field(default="", max_length=1000)
+    suspected_confounds: list[str] = Field(default_factory=list, max_length=10)
+
+
+class AnalyzerReport(_Strict):
+    findings: list[AnalyzerFindings] = Field(default_factory=list)
 
 
 class EvaluatorVerdict(_Strict):
